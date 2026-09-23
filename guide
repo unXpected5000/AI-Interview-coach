@@ -1,0 +1,137 @@
+How to Run AI Interview Coach (Beginner Guide)
+What You Need Installed
+
+Before running the project, install:
+
+1. Python 3.11
+
+Check:
+
+python --version
+
+Should show something like:
+
+Python 3.11.x
+2. Node.js
+
+Check:
+
+node -v
+npm -v
+
+If both show version numbers, you're good.
+
+Project Structure
+
+The project folder should look like:
+
+AI Interview Coach
+│
+├── backend
+└── frontend
+Step 1: Start the Backend
+
+Open Command Prompt.
+
+Go to backend:
+
+cd "X:\AI Interview Coach\backend"
+
+Activate virtual environment:
+
+.venv\Scripts\activate
+
+You should see:
+
+(.venv)
+
+at the start of the line.
+
+Now start the backend:
+
+python -m uvicorn app.main:app --reload
+
+If successful, you'll see:
+
+Uvicorn running on http://127.0.0.1:8000
+
+Leave this window open.
+
+Step 2: Start the Frontend
+
+Open a second Command Prompt.
+
+Go to frontend:
+
+cd "X:\AI Interview Coach\frontend"
+
+Install packages (first time only):
+
+npm install
+
+Start frontend:
+
+npm run dev
+
+You'll see something like:
+
+Local: http://localhost:5173
+
+Leave this window open too.
+
+Step 3: Open the Website
+
+Open your browser.
+
+Go to:
+
+http://localhost:5173
+
+The AI Interview Coach website should open.
+
+If Registration/Login Doesn't Work
+
+Check that:
+
+Backend is running
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+If a page opens, backend is working.
+
+MongoDB is configured
+
+Backend needs a valid MongoDB connection string in:
+
+backend/.env
+
+Without it, registration and login will fail.
+
+If You Get Missing Package Errors
+
+Backend:
+
+pip install -r requirements.txt
+
+Frontend:
+
+npm install
+Every Time You Want To Run The Project
+
+Open 2 terminals.
+
+Terminal 1
+cd "X:\AI Interview Coach\backend"
+.venv\Scripts\activate
+python -m uvicorn app.main:app --reload
+Terminal 2
+cd "X:\AI Interview Coach\frontend"
+npm run dev
+
+Then open:
+
+http://localhost:5173
+
+That's it. The project should now be running locally on your computer.
