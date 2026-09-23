@@ -1,0 +1,36 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.routes.auth import router as auth_router
+from app.api.routes.health import router as health_router
+from app.api.routes.interviews import router as interviews_router
+from app.api.routes.resume_optimizer import router as resume_optimizer_router
+from app.api.routes.resumes import router as resumes_router
+from app.core.config import settings
+from app.db.mongodb import close_mongo_connection, connect_to_mongo
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_to_mongo()
+    yield
+    await close_mongo_connection()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(health_router, prefix=settings.api_prefix)
+app.include_router(auth_router, prefix=settings.api_prefix)
+app.include_router(resumes_router, prefix=settings.api_prefix)
+app.include_router(interviews_router, prefix=settings.api_prefix)
+app.include_router(resume_optimizer_router, prefix=settings.api_prefix)

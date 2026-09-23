@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+motor
+pymongo
+python-dotenv
+python-multipart
+pymupdf
+sentence-transformers
+numpy
+passlib[bcrypt]
+bcrypt==4.0.1
+python-jose[cryptography]
+email-validator
+pytest
+httpx
