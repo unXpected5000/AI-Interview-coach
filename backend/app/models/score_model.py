@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.readiness_service import build_assessment_summary
+
 SCORES_COLLECTION = "scores"
 
 
@@ -29,6 +31,7 @@ def build_score_document(
         "improvement_suggestions": improvement_suggestions,
         "learning_roadmap": learning_roadmap,
         "question_scores": question_scores,
+        "assessment_version": 2,
         "webcam_summary": webcam_summary or {},
         "report": report or {},
         "created_at": datetime.now(timezone.utc),
@@ -36,11 +39,14 @@ def build_score_document(
 
 
 def serialize_score(document: dict[str, Any]) -> dict[str, Any]:
+    assessment = build_assessment_summary(document.get("overall_score", 0), document.get("question_scores", []))
     return {
         "id": str(document["_id"]),
         "user_id": document["user_id"],
         "interview_id": document["interview_id"],
         "overall_score": document["overall_score"],
+        "assessment_version": document.get("assessment_version", 1),
+        **assessment,
         "communication_score": document.get("communication_score", 0),
         "strengths": document.get("strengths", []),
         "weaknesses": document.get("weaknesses", []),

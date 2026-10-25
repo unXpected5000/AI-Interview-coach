@@ -22,6 +22,7 @@ class AnswerRepository:
         evaluation: dict[str, Any],
         speech_analysis: dict[str, Any] | None = None,
         webcam_metrics: dict[str, Any] | None = None,
+        answer_status: str = "answered",
     ) -> dict[str, Any]:
         document = build_answer_document(
             user_id=user_id,
@@ -34,6 +35,7 @@ class AnswerRepository:
             evaluation=evaluation,
             speech_analysis=speech_analysis,
             webcam_metrics=webcam_metrics,
+            answer_status=answer_status,
         )
         await self.collection.update_one(
             {"interview_id": interview_id, "question_id": question_id, "user_id": user_id},
@@ -57,3 +59,9 @@ class AnswerRepository:
         return await self.collection.find_one(
             {"interview_id": interview_id, "question_id": question_id, "user_id": user_id}
         )
+
+    async def delete_by_interview_ids_and_user(self, interview_ids: list[str], user_id: str) -> None:
+        if interview_ids:
+            await self.collection.delete_many(
+                {"interview_id": {"$in": interview_ids}, "user_id": user_id}
+            )

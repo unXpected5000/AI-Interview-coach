@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,8 +26,20 @@ class Settings(BaseSettings):
 
     sentence_transformers_model: str = "all-MiniLM-L6-v2"
     max_resume_upload_mb: int = 10
+    readiness_developing_threshold: int = Field(default=20, ge=0, le=100)
+    readiness_moderate_threshold: int = Field(default=40, ge=0, le=100)
+    readiness_good_progress_threshold: int = Field(default=60, ge=0, le=100)
+    readiness_strong_threshold: int = Field(default=80, ge=0, le=100)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @model_validator(mode="after")
+    def validate_readiness_thresholds(self):
+        thresholds = [self.readiness_developing_threshold, self.readiness_moderate_threshold,
+                      self.readiness_good_progress_threshold, self.readiness_strong_threshold]
+        if thresholds != sorted(thresholds) or len(set(thresholds)) != len(thresholds):
+            raise ValueError("Readiness thresholds must be strictly increasing.")
+        return self
 
     @property
     def cors_origins(self) -> list[str]:

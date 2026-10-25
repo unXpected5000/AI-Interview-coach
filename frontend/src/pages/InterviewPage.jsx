@@ -7,10 +7,7 @@ import ProgressBar from "../components/ui/ProgressBar.jsx";
 import VoiceMetricsPanel from "../components/interview/VoiceMetricsPanel.jsx";
 import { WebcamPanel } from "../components/interview/WebcamPanel.jsx";
 import { buildSpeechAnalysis } from "../utils/speechAnalysis.js";
-
-function getSpeechRecognitionCtor() {
-  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
-}
+import { createSpeechRecognition, getSpeechRecognitionConstructor, getSpeechRecognitionMode } from "../utils/speechRecognition.js";
 
 function formatSeconds(value) {
   const total = Math.max(0, Number(value || 0));
@@ -24,9 +21,15 @@ export default function InterviewPage() {
   const navigate = useNavigate();
   const recognitionRef = useRef(null);
   const recordingStartRef = useRef(0);
+  const pauseStartRef = useRef(0);
+  const totalPausedTimeRef = useRef(0);
   const transcriptRef = useRef("");
   const resultTimestampsRef = useRef([]);
   const silenceTimeoutRef = useRef(null);
+  const recognitionRetryTimeoutRef = useRef(null);
+  const recognitionRetriesRef = useRef(0);
+  const shouldListenRef = useRef(false);
+  const activeQuestionIdRef = useRef(null);
   const [interviewState, setInterviewState] = useState(null);
   const [answers, setAnswers] = useState({});
   const [draft, setDraft] = useState("");
@@ -39,6 +42,7 @@ export default function InterviewPage() {
   const [liveDuration, setLiveDuration] = useState(0);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speechError, setSpeechError] = useState("");
+  const [speechMode, setSpeechMode] = useState("");
   const [error, setError] = useState("");
   const [webcamMetrics, setWebcamMetrics] = useState({});
 
@@ -47,7 +51,7 @@ export default function InterviewPage() {
     if (recordingState === 'RECORDING') {
       interval = setInterval(() => {
         if (recordingStartRef.current) {
-          setLiveDuration((Date.now() - recordingStartRef.current) / 1000);
+          setLiveDuration((Date.now() - recordingStartRef.current - totalPausedTimeRef.current) / 1000);
         }
       }, 1000);
     } else if (recordingState === 'IDLE') {
@@ -57,7 +61,7 @@ export default function InterviewPage() {
   }, [recordingState]);
 
   useEffect(() => {
-    setSpeechSupported(Boolean(getSpeechRecognitionCtor()));
+    setSpeechSupported(Boolean(getSpeechRecognitionConstructor()));
   }, []);
 
   useEffect(() => {
@@ -100,11 +104,13 @@ export default function InterviewPage() {
 
     return () => {
       active = false;
+      shouldListenRef.current = false;
       if (recognitionRef.current) {
         recognitionRef.current.abort?.();
         recognitionRef.current = null;
       }
       if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+      if (recognitionRetryTimeoutRef.current) clearTimeout(recognitionRetryTimeoutRef.current);
     };
   }, [interviewId]);
 
@@ -119,6 +125,7 @@ export default function InterviewPage() {
 
   useEffect(() => {
     const savedAnswer = currentQuestion ? answers[currentQuestion.question_id] : null;
+    activeQuestionIdRef.current = currentQuestion?.question_id ?? null;
     const savedTranscript = savedAnswer?.transcript || savedAnswer?.answer_text || "";
     setDraft(savedAnswer?.answer_text ?? "");
     setTranscript(savedTranscript);
@@ -126,91 +133,112 @@ export default function InterviewPage() {
     resultTimestampsRef.current = [];
     setSpeechAnalysis(savedAnswer?.speech_analysis ?? null);
     setSpeechError("");
+    setSpeechMode("");
     setRecordingState('IDLE');
+    shouldListenRef.current = false;
     if (recognitionRef.current) {
       recognitionRef.current.abort?.();
       recognitionRef.current = null;
     }
     if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+    if (recognitionRetryTimeoutRef.current) clearTimeout(recognitionRetryTimeoutRef.current);
     recordingStartRef.current = 0;
+    pauseStartRef.current = 0;
+    totalPausedTimeRef.current = 0;
   }, [answers, currentQuestion]);
 
-  function createRecognitionInstance() {
-    const SpeechRecognition = getSpeechRecognitionCtor();
-    if (!SpeechRecognition) {
+  async function createRecognitionInstance() {
+    const questionId = currentQuestion?.question_id;
+    let result;
+    try {
+      result = await createSpeechRecognition((message) => setSpeechError(message));
+    } catch {
+      setSpeechError("Could not start speech recognition. Type your answer or retry the microphone.");
       return null;
     }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.continuous = true; // Use continuous so it doesn't stop on pause
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    const { recognition, processLocally } = result;
+    if (!recognition) return null;
 
     recognition.onresult = (event) => {
-      // If we are paused, ignore
-      // But actually if we stop() on pause, this won't fire much after.
+      if (activeQuestionIdRef.current !== questionId) return;
+      const elapsed = recordingStartRef.current
+        ? (Date.now() - recordingStartRef.current - totalPausedTimeRef.current) / 1000
+        : 0;
 
-      let nextTranscript = "";
+      let interimTranscript = "";
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        nextTranscript += event.results[index][0].transcript;
+        const chunk = event.results[index][0].transcript;
+        if (event.results[index].isFinal) {
+          recognitionRetriesRef.current = 0;
+          transcriptRef.current += (transcriptRef.current ? " " : "") + chunk.trim();
+          resultTimestampsRef.current.push(elapsed);
+        } else {
+          interimTranscript += chunk;
+        }
       }
 
-      const cleanedTranscript = nextTranscript.trim();
-      const fullTranscript = transcriptRef.current ? transcriptRef.current + " " + cleanedTranscript : cleanedTranscript;
+      const fullTranscript = transcriptRef.current + (interimTranscript ? " " + interimTranscript.trim() : "");
       
       setTranscript(fullTranscript);
       setDraft(fullTranscript);
       
-      const elapsed = recordingStartRef.current
-        ? (Date.now() - recordingStartRef.current) / 1000
-        : 0;
-
-      // Track timestamp
-      if (event.results[event.results.length - 1].isFinal) {
-        transcriptRef.current = fullTranscript;
-        resultTimestampsRef.current.push(elapsed);
-      } else {
-        // Just note that there is activity
-        if (resultTimestampsRef.current.length === 0 || resultTimestampsRef.current[resultTimestampsRef.current.length - 1] !== elapsed) {
-          resultTimestampsRef.current.push(elapsed);
-        }
-      }
-
       setSpeechAnalysis(buildSpeechAnalysis(fullTranscript, elapsed, resultTimestampsRef.current));
-
-      // Reset silence timeout
-      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-      silenceTimeoutRef.current = setTimeout(() => {
-        handleStopRecording();
-      }, 30000);
     };
 
     recognition.onerror = (event) => {
-      setSpeechError(event.error === "not-allowed"
-        ? "Microphone access was blocked."
-        : "Speech recognition stopped unexpectedly.");
-      setRecordingState('IDLE');
-      recordingStartRef.current = 0;
-      recognitionRef.current = null;
-      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+      if (activeQuestionIdRef.current !== questionId) return;
+      if (event.error === "network" && !processLocally) {
+        shouldListenRef.current = false;
+        setRecordingState("PAUSED");
+        pauseStartRef.current = Date.now();
+        setSpeechError("The browser speech service lost its network connection. Your transcript is safe; retry when online or type your answer.");
+        recognitionRef.current = null;
+        return;
+      }
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        shouldListenRef.current = false;
+        setSpeechError("Microphone access was blocked.");
+        setRecordingState('IDLE');
+        recordingStartRef.current = 0;
+        recognitionRef.current = null;
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+        return;
+      }
+      
+      if (event.error !== "no-speech" && event.error !== "aborted") {
+        setSpeechError(`Speech recognition issue (${event.error}). Check your microphone or type your answer.`);
+      }
     };
 
     recognition.onend = () => {
-      // If continuous, it might end randomly or when stopped.
-      // If state is RECORDING, it means it ended unexpectedly, we should maybe restart, but for now we just let it go to IDLE unless we were PAUSED.
-      setRecordingState((prev) => {
-        if (prev === 'RECORDING') {
-          return 'IDLE';
+      if (!shouldListenRef.current || activeQuestionIdRef.current !== questionId) return;
+      if (recognitionRetriesRef.current >= 3) {
+        shouldListenRef.current = false;
+        setRecordingState("PAUSED");
+        setSpeechError("Speech recognition stopped after several retries. Your answer is safe; type it or restart the microphone.");
+        return;
+      }
+      const delays = [250, 600, 1200];
+      const delay = delays[recognitionRetriesRef.current];
+      recognitionRetriesRef.current += 1;
+      recognitionRetryTimeoutRef.current = window.setTimeout(async () => {
+        recognitionRetryTimeoutRef.current = null;
+        if (!shouldListenRef.current) return;
+        const nextRecognition = await createRecognitionInstance();
+        if (!nextRecognition || !shouldListenRef.current) return;
+        recognitionRef.current = nextRecognition;
+        try {
+          nextRecognition.start();
+        } catch {
+          if (shouldListenRef.current) nextRecognition.stop?.();
         }
-        return prev;
-      });
+      }, delay);
     };
 
     return recognition;
   }
 
-  function handleStartRecording() {
+  async function handleStartRecording() {
     if (!speechSupported) {
       setSpeechError("Speech recognition is not supported in this browser.");
       return;
@@ -218,12 +246,18 @@ export default function InterviewPage() {
 
     setSpeechError("");
     setRecordingState('RECORDING');
+    shouldListenRef.current = true;
+    recognitionRetriesRef.current = 0;
     setTranscript("");
     transcriptRef.current = "";
     resultTimestampsRef.current = [];
     setSpeechAnalysis(null);
 
-    const recognition = createRecognitionInstance();
+    const mode = await getSpeechRecognitionMode((message) => setSpeechError(message));
+    if (!shouldListenRef.current) return;
+    const recognition = await createRecognitionInstance();
+    if (!shouldListenRef.current) return;
+    if (mode.SpeechRecognition) setSpeechMode(mode.processLocally ? "On-device recognition" : "Browser speech service (network required)");
     if (!recognition) {
       setSpeechError("Speech recognition is not available.");
       setRecordingState('IDLE');
@@ -232,14 +266,15 @@ export default function InterviewPage() {
 
     recognitionRef.current = recognition;
     recordingStartRef.current = Date.now();
+    pauseStartRef.current = 0;
+    totalPausedTimeRef.current = 0;
 
     try {
+      if (recognitionRetryTimeoutRef.current) clearTimeout(recognitionRetryTimeoutRef.current);
       recognition.start();
       if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-      silenceTimeoutRef.current = setTimeout(() => {
-        handleStopRecording();
-      }, 30000);
     } catch (startError) {
+      shouldListenRef.current = false;
       setRecordingState('IDLE');
       setSpeechError("Unable to start speech recognition.");
       recordingStartRef.current = 0;
@@ -251,36 +286,49 @@ export default function InterviewPage() {
   function handlePauseRecording() {
     if (!recognitionRef.current) return;
     try {
+      shouldListenRef.current = false;
+      if (recognitionRetryTimeoutRef.current) clearTimeout(recognitionRetryTimeoutRef.current);
       recognitionRef.current.stop(); // Stop listening
       setRecordingState('PAUSED');
+      pauseStartRef.current = Date.now();
       if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
     } catch (err) {
       console.error(err);
     }
   }
 
-  function handleResumeRecording() {
+  async function handleResumeRecording() {
     if (!speechSupported) return;
+    shouldListenRef.current = true;
     setRecordingState('RECORDING');
     
+    if (pauseStartRef.current) {
+      totalPausedTimeRef.current += Date.now() - pauseStartRef.current;
+      pauseStartRef.current = 0;
+    }
+    
     // Create new instance to resume
-    const recognition = createRecognitionInstance();
+    const recognition = await createRecognitionInstance();
+    if (!shouldListenRef.current) return;
     if (recognition) {
       recognitionRef.current = recognition;
       try {
         recognition.start();
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
-        silenceTimeoutRef.current = setTimeout(() => {
-          handleStopRecording();
-        }, 30000);
       } catch (err) {
         setSpeechError("Unable to resume speech recognition.");
         setRecordingState('PAUSED');
       }
+    } else {
+      shouldListenRef.current = false;
+      setRecordingState("PAUSED");
+      setSpeechError("Speech recognition is unavailable. Your transcript is safe; type your answer instead.");
     }
   }
 
   function handleStopRecording() {
+    shouldListenRef.current = false;
+    if (recognitionRetryTimeoutRef.current) clearTimeout(recognitionRetryTimeoutRef.current);
     setRecordingState('IDLE');
     if (recognitionRef.current) {
       try {
@@ -291,14 +339,22 @@ export default function InterviewPage() {
       recognitionRef.current = null;
     }
     if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+    
+    if (pauseStartRef.current) {
+      totalPausedTimeRef.current += Date.now() - pauseStartRef.current;
+      pauseStartRef.current = 0;
+    }
+
     const elapsed = recordingStartRef.current
-      ? (Date.now() - recordingStartRef.current) / 1000
+      ? (Date.now() - recordingStartRef.current - totalPausedTimeRef.current) / 1000
       : 0;
     const finalTranscript = transcriptRef.current.trim();
     if (recordingStartRef.current && finalTranscript) {
       setSpeechAnalysis(buildSpeechAnalysis(finalTranscript, elapsed, resultTimestampsRef.current));
     }
     recordingStartRef.current = 0;
+    pauseStartRef.current = 0;
+    totalPausedTimeRef.current = 0;
   }
 
   async function handleNext() {
@@ -316,14 +372,14 @@ export default function InterviewPage() {
     setIsSaving(true);
 
     try {
-      const transcriptToStore = transcript.trim() || draft.trim();
+        const transcriptToStore = transcript.trim() || undefined;
       const savedAnswer = await submitAnswer(
         interviewId,
         currentQuestion.question_id,
         draft.trim(),
         {
           transcript: transcriptToStore,
-          speech_analysis: speechAnalysis || undefined,
+          speech_analysis: transcriptToStore ? speechAnalysis || undefined : undefined,
           webcam_metrics: webcamMetrics,
         },
       );
@@ -332,7 +388,28 @@ export default function InterviewPage() {
         [currentQuestion.question_id]: savedAnswer,
       }));
 
-      const isLastQuestion = currentIndex >= questions.length - 1;
+      setInterviewState((current) => {
+        if (!current?.interview) return current;
+        let updatedQuestions = current.interview.questions.map((question) =>
+          question.question_id === savedAnswer.adapted_question?.question_id
+            ? savedAnswer.adapted_question
+            : question,
+        );
+        const followUp = savedAnswer.follow_up_question;
+        if (followUp && !updatedQuestions.some((question) => question.question_id === followUp.question_id)) {
+          const parentIndex = updatedQuestions.findIndex(
+            (question) => question.question_id === currentQuestion.question_id,
+          );
+          updatedQuestions.splice(parentIndex + 1, 0, followUp);
+        }
+        return {
+          ...current,
+          interview: { ...current.interview, questions: updatedQuestions },
+        };
+      });
+
+      const hasNewFollowUp = Boolean(savedAnswer.follow_up_question);
+      const isLastQuestion = currentIndex >= questions.length - 1 && !hasNewFollowUp;
       if (isLastQuestion) {
         await completeInterview(interviewId);
         navigate(`/interviews/${interviewId}/results`, { replace: true });
@@ -459,6 +536,7 @@ export default function InterviewPage() {
               <p className="mt-3 min-h-24 whitespace-pre-wrap rounded-lg bg-white p-3 text-sm leading-6 text-stone-700">
                 {transcript || "Speech transcript will appear here when recording starts."}
               </p>
+              {speechMode ? <p className="mt-2 text-xs font-semibold text-teal-700">{speechMode}</p> : null}
               <div className="mt-4 flex flex-wrap gap-3">
                 {recordingState === 'IDLE' && (
                   <button

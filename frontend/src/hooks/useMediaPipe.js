@@ -3,22 +3,34 @@ import { MediaPipeAnalyzer } from "../utils/mediapipeAnalyzer.js";
 
 export function useMediaPipe(videoRef, isActive = true) {
   const [metrics, setMetrics] = useState({
-    eyeContactPercentage: 0,
-    headMovementScore: 0,
-    smileFrequency: 0,
+    face_visibility_pct: 0,
+    centered_frame_pct: 0,
+    head_movement_index: 0,
+    sample_count: 0,
     coachingSuggestions: [],
   });
   const [isReady, setIsReady] = useState(false);
+  const [error, setError] = useState("");
   const analyzerRef = useRef(null);
 
   useEffect(() => {
+    if (!isActive) {
+      setIsReady(false);
+      setError("");
+      return undefined;
+    }
     let isMounted = true;
     const init = async () => {
+      setError("");
       const analyzer = new MediaPipeAnalyzer();
       analyzerRef.current = analyzer;
       const success = await analyzer.initialize();
       if (success && isMounted) {
         setIsReady(true);
+      } else if (isMounted) {
+        setError("Local face tracking could not load. Camera preview remains available.");
+      } else if (!isMounted) {
+        analyzer.stop();
       }
     };
     
@@ -29,8 +41,10 @@ export function useMediaPipe(videoRef, isActive = true) {
       if (analyzerRef.current) {
         analyzerRef.current.stop();
       }
+      analyzerRef.current = null;
+      setIsReady(false);
     };
-  }, []);
+  }, [isActive]);
 
   useEffect(() => {
     if (isReady && isActive && videoRef.current && analyzerRef.current) {
@@ -55,5 +69,5 @@ export function useMediaPipe(videoRef, isActive = true) {
     }
   }, [isReady, isActive, videoRef]);
 
-  return { metrics, isReady };
+  return { metrics, isReady, error };
 }

@@ -22,3 +22,7 @@ export async function getResume(resumeId) {
   return response.data;
 }
 
+export async function deleteResume(resumeId) {
+  await apiClient.delete(`/resumes/${resumeId}`);
+}
+

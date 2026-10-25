@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+import math
 from typing import Any
+from app.services.readiness_service import build_assessment_summary
 
 INTERVIEWS_COLLECTION = "interviews"
 
@@ -64,25 +66,55 @@ def serialize_interview_summary(document: dict[str, Any], score: dict[str, Any] 
         "strengths": score.get("strengths", []) if score else [],
         "weaknesses": score.get("weaknesses", []) if score else [],
     }
+    if score:
+        summary.update(build_assessment_summary(score.get("overall_score", 0), score.get("question_scores", [])))
 
     if score and score.get("question_scores"):
         qs = score["question_scores"]
-        wpms = [q.get("speech_analysis", {}).get("words_per_minute", 0) for q in qs if q.get("speech_analysis", {}).get("words_per_minute") is not None]
-        fillers = [q.get("speech_analysis", {}).get("filler_count", 0) for q in qs if q.get("speech_analysis", {}).get("filler_count") is not None]
-        eye_contacts = [q.get("webcam_metrics", {}).get("eye_contact_duration", 0) for q in qs if q.get("webcam_metrics", {}).get("eye_contact_duration") is not None]
-
-        if not eye_contacts:
-            eye_contacts = [q.get("webcam_metrics", {}).get("eye_contact", 0) for q in qs if q.get("webcam_metrics", {}).get("eye_contact") is not None]
-
+        speech = [q.get("speech_analysis", {}) for q in qs]
+        speech_with_words = [item for item in speech if item.get("word_count", 0) > 0]
+        wpms = [item.get("words_per_minute", 0) for item in speech_with_words if item.get("duration_seconds", 0) > 0]
+        fillers = [item.get("filler_count", 0) for item in speech_with_words]
+        webcam_values = {
+            "face_visibility_pct": [],
+            "centered_frame_pct": [],
+            "head_movement_index": [],
+        }
+        camera_answers = 0
+        for question_score in qs:
+            metrics = question_score.get("webcam_metrics") or {}
+            had_metrics = False
+            for key in webcam_values:
+                value = metrics.get(key)
+                if value is None:
+                    continue
+                try:
+                    numeric_value = float(value)
+                    if not math.isfinite(numeric_value):
+                        continue
+                    webcam_values[key].append(max(0.0, min(100.0, numeric_value)))
+                    had_metrics = True
+                except (TypeError, ValueError):
+                    continue
+            camera_answers += int(had_metrics)
         summary["voice_summary"] = {
             "average_wpm": sum(wpms) / len(wpms) if wpms else 0,
-            "average_fillers": sum(fillers) / len(fillers) if fillers else 0
+            "average_fillers": sum(fillers) / len(fillers) if fillers else 0,
+            "answers_with_speech": len(speech_with_words),
         }
         summary["webcam_summary"] = {
-            "average_eye_contact": sum(eye_contacts) / len(eye_contacts) if eye_contacts else 0
+            "average_face_visibility_pct": sum(webcam_values["face_visibility_pct"]) / len(webcam_values["face_visibility_pct"]) if webcam_values["face_visibility_pct"] else None,
+            "average_centered_frame_pct": sum(webcam_values["centered_frame_pct"]) / len(webcam_values["centered_frame_pct"]) if webcam_values["centered_frame_pct"] else None,
+            "average_head_movement_index": sum(webcam_values["head_movement_index"]) / len(webcam_values["head_movement_index"]) if webcam_values["head_movement_index"] else None,
+            "answers_with_metrics": camera_answers,
         }
     else:
-        summary["voice_summary"] = {"average_wpm": 0, "average_fillers": 0}
-        summary["webcam_summary"] = {"average_eye_contact": 0}
+        summary["voice_summary"] = {"average_wpm": 0, "average_fillers": 0, "answers_with_speech": 0}
+        summary["webcam_summary"] = {
+            "average_face_visibility_pct": None,
+            "average_centered_frame_pct": None,
+            "average_head_movement_index": None,
+            "answers_with_metrics": 0,
+        }
 
     return summary

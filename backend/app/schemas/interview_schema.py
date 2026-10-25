@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -37,10 +39,11 @@ class InterviewStartResponse(BaseModel):
 
 class AnswerCreateRequest(BaseModel):
     question_id: int
-    answer_text: str = Field(min_length=1)
+    answer_text: str = ""
     transcript: str | None = None
-    speech_analysis: dict | None = None
+    speech_metadata: dict | None = None
     webcam_metrics: dict | None = None
+    answer_status: Literal["answered", "partial", "interrupted", "skipped"] = "answered"
 
 
 class AnswerResponse(BaseModel):
@@ -49,6 +52,7 @@ class AnswerResponse(BaseModel):
     interview_id: str
     question_id: int
     answer_text: str
+    answer_status: Literal["answered", "partial", "interrupted", "unanswered", "skipped", "evaluation_failed"] = "answered"
     transcript: str
     semantic_score: float
     communication_score: float = 0
@@ -60,6 +64,8 @@ class AnswerResponse(BaseModel):
     evaluation: dict | None = None
     speech_analysis: dict | None = None
     webcam_metrics: dict | None = None
+    follow_up_question: InterviewQuestion | None = None
+    adapted_question: InterviewQuestion | None = None
     answered_at: datetime
     updated_at: datetime
 
@@ -80,6 +86,17 @@ class CompleteInterviewResponse(BaseModel):
     recommendations: list[str]
     improvement_suggestions: list[str] = Field(default_factory=list)
     learning_roadmap: list[str] = Field(default_factory=list)
+    assessment_version: int = 2
+    performance_score: float = 0
+    readiness_category: str = "Needs substantial practice"
+    answered_questions: int = 0
+    evaluated_questions: int = 0
+    total_questions: int = 0
+    completion_percentage: float = 0
+    assessment_reliability: str = "Limited sample"
+    assessment_note: str = ""
+    scoring_rubric: str = ""
+    evaluation_failed_questions: int = 0
 
 
 class InterviewSummary(BaseModel):
@@ -95,6 +112,11 @@ class InterviewSummary(BaseModel):
     question_scores: list[dict] = Field(default_factory=list)
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
+    readiness_category: str | None = None
+    performance_score: float | None = None
+    answered_questions: int = 0
+    completion_percentage: float = 0
+    assessment_reliability: str | None = None
 
 
 class InterviewListResponse(BaseModel):

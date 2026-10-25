@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
 
 
 @lru_cache
 def get_embedding_model() -> SentenceTransformer:
+    # Keep API startup and non-scoring routes independent of Torch's native DLLs.
+    from sentence_transformers import SentenceTransformer
+
     return SentenceTransformer(settings.sentence_transformers_model)
 
 

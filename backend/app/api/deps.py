@@ -93,8 +93,21 @@ def get_resume_service(
     skill_service: Annotated[SkillService, Depends(get_skill_service)],
     resume_parser_service: Annotated[ResumeParserService, Depends(get_resume_parser_service)],
     llm_client: Annotated[LLMClient, Depends(get_llm_client)],
+    interview_repository: Annotated[InterviewRepository, Depends(get_interview_repository)],
+    answer_repository: Annotated[AnswerRepository, Depends(get_answer_repository)],
+    score_repository: Annotated[ScoreRepository, Depends(get_score_repository)],
+    optimizer_repository: Annotated[ResumeOptimizerRepository, Depends(get_resume_optimizer_repository)],
 ) -> ResumeService:
-    return ResumeService(resume_repository, skill_service, resume_parser_service, llm_client)
+    return ResumeService(
+        resume_repository,
+        skill_service,
+        resume_parser_service,
+        llm_client,
+        interview_repository,
+        answer_repository,
+        score_repository,
+        optimizer_repository,
+    )
 
 
 def get_resume_optimizer_service(

@@ -34,3 +34,9 @@ class ResumeRepository:
 
     async def get_by_id_and_user(self, resume_id: str, user_id: str) -> dict[str, Any] | None:
         return await self.collection.find_one({"_id": to_object_id(resume_id), "user_id": user_id})
+
+    async def delete_by_id_and_user(self, resume_id: str, user_id: str) -> bool:
+        result = await self.collection.delete_one(
+            {"_id": to_object_id(resume_id), "user_id": user_id}
+        )
+        return result.deleted_count == 1

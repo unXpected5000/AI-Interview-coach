@@ -58,8 +58,9 @@ async def submit_answer(
         question_id=payload.question_id,
         answer_text=payload.answer_text,
         transcript=payload.transcript,
-        speech_analysis=payload.speech_analysis,
+        speech_metadata=payload.speech_metadata,
         webcam_metrics=payload.webcam_metrics,
+        answer_status=payload.answer_status,
     )
 
 

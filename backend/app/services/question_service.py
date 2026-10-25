@@ -10,7 +10,6 @@ from app.utils.mongo import make_json_safe
 
 
 QUESTION_TYPES = ("conceptual", "practical", "scenario")
-DIFFICULTY_SEQUENCE = ["easy", "easy", "easy", "easy", "medium", "medium", "medium", "medium", "hard", "hard"]
 QUESTION_TYPE_SEQUENCE = [
     "conceptual",
     "practical",
@@ -42,6 +41,8 @@ class QuestionService:
         try:
             response_text = await self.llm_client.generate(prompt)
             parsed = self.llm_client.parse_json(response_text)
+            if not isinstance(parsed, dict):
+                raise ValueError("Question response must be a JSON object.")
             questions = self._validate_questions(parsed.get("questions", []), topic_plan)
             if questions:
                 return questions
@@ -49,6 +50,144 @@ class QuestionService:
             pass
 
         return self._build_fallback_questions(topic_plan)
+
+    @staticmethod
+    def difficulty_for_score(score: float) -> str:
+        if score < 50:
+            return "easy"
+        if score >= 80:
+            return "hard"
+        return "medium"
+
+    async def adapt_question(
+        self,
+        question: dict[str, Any],
+        answer_text: str,
+        score: float,
+    ) -> dict[str, Any]:
+        """Rewrite the next question at a level selected from the last answer."""
+        difficulty = self.difficulty_for_score(score)
+        prompt = (
+            "Rewrite the next interview question for the requested difficulty, using the candidate's prior answer "
+            "to choose a useful level of challenge. Return one strict JSON object with keys question, expected_answer, "
+            "expected_points (array of strings), and question_type. Keep the original topic and assess the requested "
+            "difficulty. Do not answer the question.\n\n"
+            + json.dumps(
+                {
+                    "difficulty": difficulty,
+                    "next_question": question,
+                    "previous_answer": answer_text[:3000],
+                },
+                ensure_ascii=False,
+            )
+        )
+        try:
+            parsed = self.llm_client.parse_json(await self.llm_client.generate(prompt))
+            if not isinstance(parsed, dict):
+                raise ValueError("Adaptive question response must be a JSON object.")
+            text = str(parsed.get("question", "")).strip()
+            expected = str(parsed.get("expected_answer", "")).strip()
+            points = self._normalize_list(parsed.get("expected_points", []))
+            if not text or not expected or not points:
+                raise ValueError("Adaptive question response was incomplete.")
+        except (LLMClientError, ValueError, json.JSONDecodeError):
+            text, expected, points = self._adaptive_fallback(question, difficulty)
+
+        adapted = dict(question)
+        adapted.update(
+            {
+                "difficulty": difficulty,
+                "question": text,
+                "expected_answer": expected,
+                "expected_points": points,
+                "key_points": points,
+            }
+        )
+        return adapted
+
+    async def generate_follow_up(
+        self,
+        question: dict[str, Any],
+        answer_text: str,
+        evaluation: dict[str, Any],
+        question_id: int,
+    ) -> dict[str, Any]:
+        score = float(evaluation.get("score", 0))
+        difficulty = "easy" if score < 50 else "hard"
+        prompt = (
+            "Create one concise, specific follow-up interview question based on the prior question and answer. "
+            "For an easy follow-up, clarify a missing fundamental. For a hard follow-up, probe a trade-off, edge case, "
+            "or deeper reasoning. Return strict JSON with question, expected_answer, and expected_points (array of strings). "
+            "Do not repeat the original question.\n\n"
+            + json.dumps(
+                {
+                    "difficulty": difficulty,
+                    "question": question.get("question", ""),
+                    "topic": question.get("topic_focus", question.get("skill", "the topic")),
+                    "answer": answer_text[:3000],
+                    "missing_points": evaluation.get("missing_points", []),
+                },
+                ensure_ascii=False,
+            )
+        )
+        try:
+            parsed = self.llm_client.parse_json(await self.llm_client.generate(prompt))
+            if not isinstance(parsed, dict):
+                raise ValueError("Follow-up response must be a JSON object.")
+            text = str(parsed.get("question", "")).strip()
+            expected = str(parsed.get("expected_answer", "")).strip()
+            points = self._normalize_list(parsed.get("expected_points", []))
+            if not text or not expected or not points:
+                raise ValueError("Follow-up response was incomplete.")
+        except (LLMClientError, ValueError, json.JSONDecodeError):
+            text, expected, points = self._follow_up_fallback(question, evaluation, difficulty)
+
+        return {
+            "question_id": question_id,
+            "skill": question.get("skill", "General"),
+            "difficulty": difficulty,
+            "question_type": "scenario" if difficulty == "hard" else "conceptual",
+            "topic_focus": question.get("topic_focus", question.get("skill", "General")),
+            "source_section": question.get("source_section", "skills"),
+            "question": text,
+            "expected_answer": expected,
+            "expected_points": points,
+            "key_points": points,
+            "follow_up_for": question["question_id"],
+        }
+
+    def _adaptive_fallback(self, question: dict[str, Any], difficulty: str) -> tuple[str, str, list[str]]:
+        topic = question.get("topic_focus", question.get("skill", "this topic"))
+        existing = str(question.get("question", "Explain this topic."))
+        points = self._normalize_list(question.get("expected_points", question.get("key_points", [])))
+        if difficulty == "easy":
+            text = f"Could you explain the main idea behind {topic} step by step?"
+        elif difficulty == "hard":
+            text = f"What trade-offs and edge cases would you consider when applying {topic}?"
+        else:
+            text = existing
+        expected = str(question.get("expected_answer", "Explain the approach, reasoning, and outcome."))
+        return text, expected, points or [f"Explain the core ideas behind {topic}"]
+
+    def _follow_up_fallback(
+        self,
+        question: dict[str, Any],
+        evaluation: dict[str, Any],
+        difficulty: str,
+    ) -> tuple[str, str, list[str]]:
+        topic = question.get("topic_focus", question.get("skill", "this topic"))
+        points = self._normalize_list(evaluation.get("missing_points", []))
+        if difficulty == "easy":
+            focus = points[0] if points else f"your use of {topic}"
+            text = f"Could you clarify {focus} with a simple example?"
+            expected_points = points or [f"Give a clear example related to {topic}"]
+        else:
+            text = f"What trade-off or edge case could change your approach to {topic}?"
+            expected_points = self._normalize_list(question.get("expected_points", [])) or [
+                f"Discuss a trade-off or edge case for {topic}"
+            ]
+        expected = "Address the follow-up directly and support the response with a relevant example or rationale."
+        return text, expected, expected_points
 
     def _build_prompt(self, structured_resume: dict[str, Any], skills: list[str], topic_plan: list[dict], interview_context: dict[str, Any] | None) -> str:
         resume_context = {
@@ -177,7 +316,8 @@ class QuestionService:
 
         plan: list[dict[str, Any]] = []
         used_topics: set[str] = set()
-        for index, difficulty in enumerate(DIFFICULTY_SEQUENCE):
+        for index in range(10):
+            difficulty = "medium"
             candidate = self._next_candidate(candidates, used_topics, index)
             question_type = QUESTION_TYPE_SEQUENCE[index]
             plan.append(
@@ -265,13 +405,14 @@ class QuestionService:
         if len(questions) != 10:
             return []
 
-        difficulty_counts = {"easy": 0, "medium": 0, "hard": 0}
         normalized_topics: set[str] = set()
         normalized_questions: list[dict] = []
 
         for index, question in enumerate(questions, start=1):
             plan_item = topic_plan[index - 1] if index - 1 < len(topic_plan) else {}
-            difficulty = str(question.get("difficulty", "")).lower().strip()
+            # Start from a consistent middle level; later questions are adapted from
+            # the candidate's server-calculated answer scores.
+            difficulty = str(plan_item.get("difficulty", "medium")).lower().strip()
             question_type = str(question.get("question_type", plan_item.get("question_type", "conceptual"))).lower().strip()
             topic_focus = str(question.get("topic_focus", plan_item.get("topic_focus", ""))).strip()
             if difficulty not in difficulty_counts or question_type not in QUESTION_TYPES or not topic_focus:
@@ -283,7 +424,6 @@ class QuestionService:
             if not expected_points:
                 return []
 
-            difficulty_counts[difficulty] += 1
             normalized_topics.add(self._normalize_key(topic_focus))
             normalized_questions.append(
                 {
@@ -300,9 +440,6 @@ class QuestionService:
                     "key_points": expected_points,
                 }
             )
-
-        if difficulty_counts["easy"] != 4 or difficulty_counts["medium"] != 4 or difficulty_counts["hard"] != 2:
-            return []
 
         return normalized_questions
 

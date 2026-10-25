@@ -5,17 +5,16 @@ export class MediaPipeAnalyzer {
     this.faceLandmarker = null;
     this.isRunning = false;
     this.lastVideoTime = -1;
+    this.lastProcessedAt = 0;
+    this.frameRequestId = null;
     this.metrics = {
-      eyeContactPercentage: 0,
-      headMovementScore: 0,
-      smileFrequency: 0
+      face_visibility_pct: 0,
+      centered_frame_pct: 0,
+      head_movement_index: 0,
+      sample_count: 0,
     };
-    this.history = {
-      eyeContact: [],
-      smile: [],
-      noseX: [],
-      noseY: []
-    };
+    this.history = { faceVisible: [], centered: [], movement: [] };
+    this.previousNose = null;
   }
 
   async initialize() {
@@ -23,16 +22,20 @@ export class MediaPipeAnalyzer {
       const filesetResolver = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
       );
-      this.faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-          delegate: "GPU"
-        },
-        outputFaceBlendshapes: true,
-        runningMode: "VIDEO",
-        numFaces: 1
-      });
-      return true;
+      const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+      for (const delegate of ["GPU", "CPU"]) {
+        try {
+          this.faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+            baseOptions: { modelAssetPath, delegate },
+            runningMode: "VIDEO",
+            numFaces: 1,
+          });
+          return true;
+        } catch {
+          // Fall back to CPU when GPU inference is unavailable.
+        }
+      }
+      return false;
     } catch (error) {
       console.error("Failed to initialize MediaPipe:", error);
       return false;
@@ -47,8 +50,9 @@ export class MediaPipeAnalyzer {
       if (!this.isRunning) return;
       
       let startTimeMs = performance.now();
-      if (this.lastVideoTime !== videoElement.currentTime) {
+      if (this.lastVideoTime !== videoElement.currentTime && startTimeMs - this.lastProcessedAt >= 80) {
         this.lastVideoTime = videoElement.currentTime;
+        this.lastProcessedAt = startTimeMs;
         try {
           const results = this.faceLandmarker.detectForVideo(videoElement, startTimeMs);
           this.processResults(results);
@@ -60,7 +64,7 @@ export class MediaPipeAnalyzer {
         }
       }
       
-      requestAnimationFrame(processFrame);
+      this.frameRequestId = requestAnimationFrame(processFrame);
     };
     
     processFrame();
@@ -68,96 +72,60 @@ export class MediaPipeAnalyzer {
 
   stop() {
     this.isRunning = false;
+    if (this.frameRequestId !== null) window.cancelAnimationFrame(this.frameRequestId);
+    this.frameRequestId = null;
+    this.faceLandmarker?.close?.();
+    this.faceLandmarker = null;
   }
 
   processResults(results) {
     if (!results.faceLandmarks || results.faceLandmarks.length === 0) {
-      this.history.eyeContact.push(-1); // Use -1 for no face detected
+      this.history.faceVisible.push(0);
+      this.history.centered.push(0);
+      this.history.movement.push(0);
+      this.previousNose = null;
+      this.trimHistory();
+      this.updateMetrics();
       return;
     }
-    
-    const blendshapes = results.faceBlendshapes[0]?.categories;
-    if (blendshapes) {
-      const findScore = (name) => {
-        const shape = blendshapes.find(b => b.categoryName === name);
-        return shape ? shape.score : 0;
-      };
-
-      const smileLeft = findScore('mouthSmileLeft');
-      const smileRight = findScore('mouthSmileRight');
-      const smileScore = (smileLeft + smileRight) / 2;
-      this.history.smile.push(smileScore > 0.5 ? 1 : 0);
-
-      const lookUp = findScore('eyeLookUpLeft') + findScore('eyeLookUpRight');
-      const lookDown = findScore('eyeLookDownLeft') + findScore('eyeLookDownRight');
-      const lookLeft = findScore('eyeLookOutLeft') + findScore('eyeLookInRight');
-      const lookRight = findScore('eyeLookInLeft') + findScore('eyeLookOutRight');
-      
-      const isLookingAway = lookUp > 0.6 || lookDown > 0.6 || lookLeft > 0.6 || lookRight > 0.6;
-      this.history.eyeContact.push(isLookingAway ? 0 : 1);
-    }
-    
-    const nose = results.faceLandmarks[0][1]; // Tip of the nose
-    this.history.noseX.push(nose.x);
-    this.history.noseY.push(nose.y);
-
-    const MAX_HISTORY = 300; 
-    if (this.history.eyeContact.length > MAX_HISTORY) this.history.eyeContact.shift();
-    if (this.history.smile.length > MAX_HISTORY) this.history.smile.shift();
-    if (this.history.noseX.length > MAX_HISTORY) this.history.noseX.shift();
-    if (this.history.noseY.length > MAX_HISTORY) this.history.noseY.shift();
-    
+    const nose = results.faceLandmarks[0][1] ?? results.faceLandmarks[0][0];
+    if (!nose) return;
+    this.history.faceVisible.push(1);
+    this.history.centered.push(nose.x >= 0.3 && nose.x <= 0.7 && nose.y >= 0.15 && nose.y <= 0.85 ? 1 : 0);
+    const movement = this.previousNose
+      ? Math.min(100, Math.hypot(nose.x - this.previousNose.x, nose.y - this.previousNose.y) * 500)
+      : 0;
+    this.history.movement.push(movement);
+    this.previousNose = { x: nose.x, y: nose.y };
+    this.trimHistory();
     this.updateMetrics();
   }
 
+  trimHistory() {
+    const maxHistory = 300;
+    for (const samples of Object.values(this.history)) {
+      if (samples.length > maxHistory) samples.shift();
+    }
+  }
+
   updateMetrics() {
-    const arrAverage = arr => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-    
-    let headMovementScore = 0;
-    let avgX = 0;
-    let avgY = 0;
-    if (this.history.noseX.length > 10) {
-      avgX = arrAverage(this.history.noseX);
-      avgY = arrAverage(this.history.noseY);
-      const varX = this.history.noseX.reduce((acc, val) => acc + Math.pow(val - avgX, 2), 0) / this.history.noseX.length;
-      const varY = this.history.noseY.reduce((acc, val) => acc + Math.pow(val - avgY, 2), 0) / this.history.noseY.length;
-      headMovementScore = Math.round(Math.sqrt(varX + varY) * 10000); 
-    }
-    
-    const validEyeContact = this.history.eyeContact.filter(v => v !== -1);
-    const eyeContactPercentage = Math.round(arrAverage(validEyeContact) * 100);
-    const smileFrequency = Math.round(arrAverage(this.history.smile) * 100);
-
+    const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
     const coachingSuggestions = [];
-    const faceVisible = this.history.eyeContact.length > 0 && this.history.eyeContact[this.history.eyeContact.length - 1] !== -1;
-    
-    if (!faceVisible && this.history.eyeContact.length > 0) {
-      coachingSuggestions.push({ type: 'warning', text: "Face not visible in camera" });
-    } else {
-      // Prioritize suggestions
-      if (eyeContactPercentage < 50) {
-        coachingSuggestions.push({ type: 'warning', text: "Maintain eye contact with camera" });
-      } else if (eyeContactPercentage > 85) {
-        coachingSuggestions.push({ type: 'positive', text: "Great eye contact" });
-      }
-
-      if (headMovementScore > 500) {
-        coachingSuggestions.push({ type: 'warning', text: "Reduce excessive head movement" });
-      }
-
-      const isOffCenter = Math.abs(avgX - 0.5) > 0.15 || Math.abs(avgY - 0.5) > 0.15;
-      if (isOffCenter) {
-        coachingSuggestions.push({ type: 'warning', text: "Center yourself in the frame" });
-      } else if (headMovementScore <= 200 && headMovementScore > 0 && coachingSuggestions.length < 2) {
-        coachingSuggestions.push({ type: 'positive', text: "Good stable posture" });
-      }
+    const faceVisibility = Math.round(average(this.history.faceVisible) * 100);
+    const centeredFrame = Math.round(average(this.history.centered) * 100);
+    const movementIndex = Math.round(average(this.history.movement));
+    if (this.history.faceVisible.length >= 30 && faceVisibility < 60) {
+      coachingSuggestions.push({ type: "warning", text: "Face detection was interrupted; check camera framing or lighting." });
     }
-
+    if (this.history.centered.length >= 30 && centeredFrame < 60) {
+      coachingSuggestions.push({ type: "warning", text: "Your face was often near the edge of the frame." });
+    }
     this.metrics = {
-      eyeContactPercentage: eyeContactPercentage,
-      headMovementScore: headMovementScore,
-      smileFrequency: smileFrequency,
-      coachingSuggestions: coachingSuggestions.slice(0, 2)
+      face_visibility_pct: faceVisibility,
+      centered_frame_pct: centeredFrame,
+      head_movement_index: movementIndex,
+      sample_count: this.history.faceVisible.length,
+      coachingSuggestions: coachingSuggestions.slice(0, 2),
     };
   }
 }

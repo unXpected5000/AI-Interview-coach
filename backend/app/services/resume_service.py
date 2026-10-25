@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import fitz
+import pymupdf as fitz
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
 from app.models.resume_model import serialize_resume
 from app.repositories.resume_repository import ResumeRepository
+from app.repositories.interview_repository import InterviewRepository
+from app.repositories.answer_repository import AnswerRepository
+from app.repositories.score_repository import ScoreRepository
+from app.repositories.resume_optimizer_repository import ResumeOptimizerRepository
 from app.services.resume_parser_service import ResumeParserService
 from app.services.skill_service import SkillService
 from app.utils.file_validation import is_pdf_file
@@ -21,11 +25,19 @@ class ResumeService:
         skill_service: SkillService,
         resume_parser_service: ResumeParserService,
         llm_client: LLMClient,
+        interview_repository: InterviewRepository,
+        answer_repository: AnswerRepository,
+        score_repository: ScoreRepository,
+        optimizer_repository: ResumeOptimizerRepository,
     ):
         self.resume_repository = resume_repository
         self.skill_service = skill_service
         self.resume_parser_service = resume_parser_service
         self.llm_client = llm_client
+        self.interview_repository = interview_repository
+        self.answer_repository = answer_repository
+        self.score_repository = score_repository
+        self.optimizer_repository = optimizer_repository
 
     async def upload_resume(self, user_id: str, file: UploadFile) -> dict:
         self._validate_upload(file)
@@ -50,6 +62,21 @@ class ResumeService:
     async def list_resumes(self, user_id: str) -> list[dict]:
         documents = await self.resume_repository.list_by_user(user_id)
         return [serialize_resume(document) for document in documents]
+
+    async def delete_resume(self, resume_id: str, user_id: str) -> None:
+        try:
+            resume = await self.resume_repository.get_by_id_and_user(resume_id, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid resume id.") from exc
+        if resume is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found.")
+
+        await self.optimizer_repository.delete_by_resume_and_user(resume_id, user_id)
+        interview_ids = await self.interview_repository.list_ids_by_resume_and_user(resume_id, user_id)
+        await self.answer_repository.delete_by_interview_ids_and_user(interview_ids, user_id)
+        await self.score_repository.delete_by_interview_ids_and_user(interview_ids, user_id)
+        await self.interview_repository.delete_by_resume_and_user(resume_id, user_id)
+        await self.resume_repository.delete_by_id_and_user(resume_id, user_id)
 
     async def get_resume(self, resume_id: str, user_id: str) -> dict | None:
         try:

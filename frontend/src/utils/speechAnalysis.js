@@ -59,10 +59,8 @@ export function buildSpeechAnalysis(transcript, durationSeconds = 0, resultTimes
       speakingConsistency = 100;
     }
   } else {
-    const simulated = simulatePauses(transcript);
-    realPauseCount = simulated.pauseCount;
-    avgPauseDuration = simulated.avgPauseDuration;
-    longestPause = avgPauseDuration > 0 ? avgPauseDuration * 1.5 : 0;
+    // Punctuation is not evidence of a spoken pause. Leave timing metrics at zero
+    // when browser recognition timestamps are unavailable.
   }
 
   return {
@@ -75,7 +73,8 @@ export function buildSpeechAnalysis(transcript, durationSeconds = 0, resultTimes
     pause_count: realPauseCount,
     longest_pause_seconds: Number(longestPause.toFixed(2)),
     avg_pause_duration: Number(avgPauseDuration.toFixed(2)),
-    speaking_consistency: Math.round(speakingConsistency)
+    speaking_consistency: Math.round(speakingConsistency),
+    result_timestamps: Array.isArray(resultTimestamps) ? [...resultTimestamps] : [],
   };
 }
 
@@ -95,14 +94,6 @@ function countFillersDetailed(normalizedTranscript) {
   }
 
   return { count, breakdown };
-}
-
-function simulatePauses(transcript) {
-  const punctuationMatches = transcript.match(/[.,;:!?]/g);
-  const pauseCount = punctuationMatches ? punctuationMatches.length : 0;
-  const avgPauseDuration = pauseCount > 0 ? 0.5 : 0;
-
-  return { pauseCount, avgPauseDuration };
 }
 
 function normalizeTranscript(value) {

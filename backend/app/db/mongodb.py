@@ -37,7 +37,13 @@ async def ensure_indexes() -> None:
     database = mongo_client[settings.mongodb_db_name]
     await database[USERS_COLLECTION].create_index("email", unique=True)
     await database[RESUMES_COLLECTION].create_index("user_id")
-    await database[INTERVIEWS_COLLECTION].create_index([("user_id", 1), ("resume_id", 1)], unique=True)
+    interview_collection = database[INTERVIEWS_COLLECTION]
+    interview_indexes = await interview_collection.index_information()
+    resume_index_key = [("user_id", 1), ("resume_id", 1)]
+    for index_name, index_data in interview_indexes.items():
+        if index_data.get("key") == resume_index_key and index_data.get("unique"):
+            await interview_collection.drop_index(index_name)
+    await interview_collection.create_index(resume_index_key)
     await database[ANSWERS_COLLECTION].create_index(
         [("interview_id", 1), ("question_id", 1), ("user_id", 1)],
         unique=True,

@@ -7,7 +7,6 @@ class ResumeResponse(BaseModel):
     id: str
     user_id: str
     filename: str
-    raw_text: str
     extracted_skills: list[str]
     structured_resume: dict
     uploaded_at: datetime

@@ -26,7 +26,6 @@ def serialize_resume(document: dict[str, Any]) -> dict[str, Any]:
         "id": str(document["_id"]),
         "user_id": document["user_id"],
         "filename": document["filename"],
-        "raw_text": document["raw_text"],
         "extracted_skills": document.get("extracted_skills", []),
         "structured_resume": document.get("structured_resume", {}),
         "uploaded_at": document["uploaded_at"],

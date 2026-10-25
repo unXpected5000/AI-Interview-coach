@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.export import router as export_router
 from app.api.routes.health import router as health_router
 from app.api.routes.interviews import router as interviews_router
 from app.api.routes.resume_optimizer import router as resume_optimizer_router
@@ -33,4 +34,5 @@ app.include_router(health_router, prefix=settings.api_prefix)
 app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(resumes_router, prefix=settings.api_prefix)
 app.include_router(interviews_router, prefix=settings.api_prefix)
+app.include_router(export_router, prefix=settings.api_prefix)
 app.include_router(resume_optimizer_router, prefix=settings.api_prefix)

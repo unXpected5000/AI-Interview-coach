@@ -58,13 +58,13 @@ export default function InterviewStartPage() {
     };
   }, []);
 
-  async function handleStartInterview(resumeId) {
+  async function handleStartInterview(resumeId, mode) {
     setError("");
     setStartingResumeId(resumeId);
 
     try {
       const data = await startInterview(resumeId);
-      navigate(`/interviews/${data.interview.id}`);
+      navigate(mode === "live" ? `/interviews/${data.interview.id}/live` : `/interviews/${data.interview.id}`);
     } catch (requestError) {
       setError(
         requestError.response?.data?.detail ?? "Unable to start interview.",
@@ -78,8 +78,8 @@ export default function InterviewStartPage() {
     <section className="animate-rise">
       <PageHeader
         eyebrow="Interview Start"
-        title="Choose a resume to begin practice"
-        description="Start from an uploaded resume. The backend will reuse an existing interview if one was already generated for that resume."
+        title="Choose how you want to practice"
+        description="Choose a resume, then use the question-by-question practice flow or join the spoken AI interview room."
       />
 
       {error ? (
@@ -138,14 +138,24 @@ export default function InterviewStartPage() {
                 <span>Tools {resume.structured_resume?.tools?.length ?? 0}</span>
               </div>
 
-              <button
-                className="mt-5 rounded-full bg-stone-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-400"
-                disabled={startingResumeId === resume.id}
-                type="button"
-                onClick={() => handleStartInterview(resume.id)}
-              >
-                {startingResumeId === resume.id ? "Starting..." : "Start interview"}
-              </button>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  className="rounded-full bg-stone-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-400"
+                  disabled={Boolean(startingResumeId)}
+                  type="button"
+                  onClick={() => handleStartInterview(resume.id, "practice")}
+                >
+                  {startingResumeId === resume.id ? "Starting…" : "Practice mode"}
+                </button>
+                <button
+                  className="rounded-full border border-teal-700 px-4 py-2 text-sm font-bold text-teal-800 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={Boolean(startingResumeId)}
+                  type="button"
+                  onClick={() => handleStartInterview(resume.id, "live")}
+                >
+                  Join live interview
+                </button>
+              </div>
             </article>
           ))}
         </div>

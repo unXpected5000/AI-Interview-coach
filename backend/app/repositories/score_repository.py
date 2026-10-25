@@ -48,3 +48,29 @@ class ScoreRepository:
 
     async def get_by_interview_and_user(self, interview_id: str, user_id: str) -> dict[str, Any] | None:
         return await self.collection.find_one({"interview_id": interview_id, "user_id": user_id})
+
+    async def delete_by_interview_ids_and_user(self, interview_ids: list[str], user_id: str) -> None:
+        if interview_ids:
+            await self.collection.delete_many(
+                {"interview_id": {"$in": interview_ids}, "user_id": user_id}
+            )
+
+    async def update_report_and_webcam_summary(
+        self,
+        interview_id: str,
+        user_id: str,
+        report: dict[str, Any],
+        webcam_summary: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        await self.collection.update_one(
+            {"interview_id": interview_id, "user_id": user_id},
+            {"$set": {"report": report, "webcam_summary": webcam_summary}},
+        )
+        return await self.collection.find_one({"interview_id": interview_id, "user_id": user_id})
+
+    async def update_assessment(self, interview_id: str, user_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
+        await self.collection.update_one(
+            {"interview_id": interview_id, "user_id": user_id},
+            {"$set": {**values, "assessment_version": 2}},
+        )
+        return await self.collection.find_one({"interview_id": interview_id, "user_id": user_id})

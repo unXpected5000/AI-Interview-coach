@@ -1,12 +1,21 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
+import ThemeToggle from "../components/ui/ThemeToggle.jsx";
 
 const navItems = [
   { label: "Dashboard", path: "/dashboard", mark: "DB" },
   { label: "Start Interview", path: "/interviews/start", mark: "ST" },
-  { label: "Resume Upload", path: "/resumes/upload", mark: "RU" },
-  { label: "Resume Optimizer", path: "/resume-optimizer", mark: "OP" },
+  {
+    label: "Resume Studio",
+    path: "/resumes/upload",
+    mark: "RS",
+    children: [
+      { label: "Upload & manage", path: "/resumes/upload" },
+      { label: "Optimize resume", path: "/resume-optimizer" },
+      { label: "Build from template", path: "/resume-builder" },
+    ],
+  },
 ];
 
 export default function AppLayout() {
@@ -30,6 +39,9 @@ export default function AppLayout() {
               AI Interview Coach
             </h1>
           </NavLink>
+          <div className="mt-4">
+            <ThemeToggle />
+          </div>
           <button
             className="rounded-full border border-stone-300 px-3 py-1 text-xs font-bold text-stone-700 transition hover:border-stone-950 hover:text-stone-950 lg:hidden"
             type="button"
@@ -40,24 +52,43 @@ export default function AppLayout() {
         </div>
 
         <nav className="flex gap-2 overflow-x-auto px-4 pb-4 lg:block lg:space-y-2 lg:px-4">
-          {navItems.map((item) => (
-            <NavLink
-              className={({ isActive }) =>
-                `flex min-w-max items-center gap-3 rounded-lg px-4 py-3 text-sm font-semibold transition ${
-                  isActive
-                    ? "bg-stone-950 text-white shadow-lg shadow-stone-950/10"
-                    : "text-stone-600 hover:bg-stone-100 hover:text-stone-950"
-                }`
-              }
-              key={item.path}
-              to={item.path}
-            >
-              <span className="grid size-8 place-items-center rounded-md bg-white/15 text-xs">
-                {item.mark}
-              </span>
-              {item.label}
-            </NavLink>
-          ))}
+            {navItems.map((item) => (
+              <div className="min-w-max" key={item.label}>
+                <NavLink
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-semibold transition ${
+                      isActive
+                        ? "bg-stone-950 text-white shadow-lg shadow-stone-950/10"
+                        : "text-stone-600 hover:bg-stone-100 hover:text-stone-950"
+                    }`
+                  }
+                  end={!item.children}
+                  to={item.path}
+                >
+                  <span className="grid size-8 place-items-center rounded-md bg-white/15 text-xs">
+                    {item.mark}
+                  </span>
+                  {item.label}
+                </NavLink>
+                {item.children ? (
+                  <div className="ml-8 mt-1 border-l border-stone-200 pl-3 lg:space-y-1">
+                    {item.children.map((child) => (
+                      <NavLink
+                        className={({ isActive }) =>
+                          `block rounded-md px-3 py-2 text-xs font-semibold transition ${
+                            isActive ? "bg-teal-50 text-teal-800" : "text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+                          }`
+                        }
+                        key={child.path}
+                        to={child.path}
+                      >
+                        {child.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
         </nav>
 
         <div className="mx-4 mt-8 hidden rounded-lg border border-teal-100 bg-teal-50 p-4 lg:block">

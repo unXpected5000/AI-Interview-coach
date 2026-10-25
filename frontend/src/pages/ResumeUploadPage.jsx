@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { listResumes, uploadResume } from "../api/resumeApi.js";
+import { deleteResume, listResumes, uploadResume } from "../api/resumeApi.js";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 
@@ -32,6 +32,7 @@ export default function ResumeUploadPage() {
   const [uploadedResume, setUploadedResume] = useState(null);
   const [resumes, setResumes] = useState([]);
   const [isLoadingResumes, setIsLoadingResumes] = useState(true);
+  const [deletingResumeId, setDeletingResumeId] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -84,6 +85,25 @@ export default function ResumeUploadPage() {
       );
     } finally {
       setIsUploading(false);
+    }
+  }
+
+  async function handleDeleteResume(resume) {
+    const confirmed = window.confirm(
+      `Delete ${resume.filename}? Its interviews, answers, reports, and optimization history will also be deleted.`,
+    );
+    if (!confirmed) return;
+
+    setError("");
+    setDeletingResumeId(resume.id);
+    try {
+      await deleteResume(resume.id);
+      setResumes((current) => current.filter((item) => item.id !== resume.id));
+      setUploadedResume((current) => (current?.id === resume.id ? null : current));
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail ?? "Unable to delete resume.");
+    } finally {
+      setDeletingResumeId(null);
     }
   }
 
@@ -227,9 +247,19 @@ export default function ResumeUploadPage() {
                         {formatUploadedAt(resume.uploaded_at)}
                       </p>
                     </div>
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-teal-700">
-                      {resume.extracted_skills.length} skills
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-teal-700">
+                        {resume.extracted_skills.length} skills
+                      </span>
+                      <button
+                        className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                        disabled={deletingResumeId === resume.id}
+                        onClick={() => handleDeleteResume(resume)}
+                        type="button"
+                      >
+                        {deletingResumeId === resume.id ? "Deleting…" : "Delete"}
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {resume.extracted_skills.slice(0, 8).map((skill) => (

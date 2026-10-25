@@ -10,6 +10,8 @@ frontend/dist/
 # Environment
 .env
 .env.*
+!.env.example
+!**/.env.example
 
 # IDE
 .vscode/

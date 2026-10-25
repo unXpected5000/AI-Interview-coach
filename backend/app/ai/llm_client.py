@@ -23,11 +23,14 @@ class LLMClient:
 
     async def generate(self, prompt: str) -> str:
         provider = settings.llm_provider.lower().strip()
-        if provider == "openai":
-            return await self._generate_openai(prompt)
-        if provider == "gemini":
-            return await self._generate_gemini(prompt)
-        raise LLMClientError(f"Unsupported LLM provider: {settings.llm_provider}")
+        try:
+            if provider == "openai":
+                return await self._generate_openai(prompt)
+            if provider == "gemini":
+                return await self._generate_gemini(prompt)
+            raise LLMClientError(f"Unsupported LLM provider: {settings.llm_provider}")
+        except httpx.HTTPError as exc:
+            raise LLMClientError("The configured LLM provider request failed.") from exc
 
     async def _generate_openai(self, prompt: str) -> str:
         if not settings.openai_api_key:

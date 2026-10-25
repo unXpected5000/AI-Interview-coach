@@ -38,3 +38,6 @@ class ResumeOptimizerRepository:
         )
         result_insert = await self.collection.insert_one(document)
         return await self.collection.find_one({"_id": result_insert.inserted_id})
+
+    async def delete_by_resume_and_user(self, resume_id: str, user_id: str) -> None:
+        await self.collection.delete_many({"resume_id": resume_id, "user_id": user_id})

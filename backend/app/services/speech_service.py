@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import math
 from typing import Any
 
 
@@ -13,28 +14,32 @@ FILLER_PHRASES = [
     "um",
     "uh",
     "like",
+    "i mean",
+    "right",
+    "well",
+    "so to speak",
+    "at the end of the day",
+    "literally",
+    "seriously",
+    "honestly",
 ]
 
 
 class SpeechService:
-    def build_speech_analysis(self, transcript: str, duration_seconds: float | None = None, frontend_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    def build_speech_analysis(
+        self,
+        transcript: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         cleaned_transcript = self._normalize_text(transcript)
         words = self._tokenize(cleaned_transcript)
         word_count = len(words)
-        
-        frontend_data = frontend_data or {}
-        safe_duration = float(duration_seconds or frontend_data.get("duration_seconds", 0))
-        
-        words_per_minute = float(frontend_data.get("words_per_minute", round((word_count / safe_duration) * 60, 2) if safe_duration > 0 else 0.0))
-        
-        filler_breakdown = frontend_data.get("filler_breakdown")
-        if filler_breakdown:
-            filler_count = sum(filler_breakdown.values())
-        else:
-            filler_breakdown, filler_count = self._count_fillers_with_breakdown(cleaned_transcript)
-            
+        metadata = metadata or {}
+        safe_duration = self._bounded_number(metadata.get("duration_seconds"), maximum=3600.0)
+        words_per_minute = round((word_count / safe_duration) * 60, 2) if safe_duration > 0 else 0.0
+        filler_breakdown, filler_count = self._count_fillers_with_breakdown(cleaned_transcript)
         filler_rate = round(filler_count / word_count, 4) if word_count > 0 else 0.0
-        pauses = float(frontend_data.get("pauses", 0))
+        pause_gaps = self._pause_gaps(metadata.get("result_timestamps"), safe_duration)
 
         return {
             "word_count": word_count,
@@ -43,7 +48,9 @@ class SpeechService:
             "filler_count": filler_count,
             "filler_rate": filler_rate,
             "filler_breakdown": filler_breakdown,
-            "pauses": pauses,
+            "pause_count": len(pause_gaps),
+            "avg_pause_duration": round(sum(pause_gaps) / len(pause_gaps), 2) if pause_gaps else 0.0,
+            "longest_pause_seconds": round(max(pause_gaps), 2) if pause_gaps else 0.0,
         }
 
     def communication_score(self, speech_analysis: dict[str, Any] | None, answer_text: str = "") -> float:
@@ -55,7 +62,7 @@ class SpeechService:
         words_per_minute = float(speech_analysis.get("words_per_minute", 0) or 0)
         filler_count = float(speech_analysis.get("filler_count", 0) or 0)
         filler_rate = float(speech_analysis.get("filler_rate", 0) or 0)
-        pauses = float(speech_analysis.get("pauses", 0) or 0)
+        pauses = float(speech_analysis.get("pause_count", 0) or 0)
 
         pace_score = self._pace_score(words_per_minute) if duration_seconds > 0 else 78.0
         filler_score = self._filler_score(filler_count, filler_rate, pauses)
@@ -106,6 +113,34 @@ class SpeechService:
                 count += len(matches)
                 working = re.sub(pattern, " ", working)
         return breakdown, count
+
+    def _bounded_number(self, value: Any, maximum: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(number):
+            return 0.0
+        return max(0.0, min(maximum, number))
+
+    def _pause_gaps(self, timestamps: Any, duration: float) -> list[float]:
+        if not isinstance(timestamps, list) or duration <= 0:
+            return []
+
+        safe_times = [
+            self._bounded_number(value, maximum=duration)
+            for value in timestamps[:500]
+        ]
+        safe_times = sorted(set(safe_times))
+        pauses: list[float] = []
+        previous: float | None = None
+        for current in safe_times:
+            if previous is not None:
+                gap = current - previous
+                if gap > 2.0:
+                    pauses.append(gap)
+            previous = current
+        return pauses
 
     def _normalize_text(self, text: str) -> str:
         cleaned = text.lower()

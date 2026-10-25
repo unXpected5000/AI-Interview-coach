@@ -15,6 +15,7 @@ def build_answer_document(
     evaluation: dict[str, Any],
     speech_analysis: dict[str, Any] | None = None,
     webcam_metrics: dict[str, Any] | None = None,
+    answer_status: str = "answered",
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     return {
@@ -33,6 +34,7 @@ def build_answer_document(
         "relevance_score": evaluation.get("relevance_score", 0),
         "speech_analysis": speech_analysis or evaluation.get("speech_analysis", {}),
         "webcam_metrics": webcam_metrics or {},
+        "answer_status": answer_status,
         "answered_at": now,
         "updated_at": now,
     }
@@ -56,6 +58,7 @@ def serialize_answer(document: dict[str, Any]) -> dict[str, Any]:
         "evaluation": document.get("evaluation", {}),
         "speech_analysis": document.get("speech_analysis", {}),
         "webcam_metrics": document.get("webcam_metrics"),
+        "answer_status": document.get("answer_status", "answered"),
         "answered_at": document.get("answered_at"),
         "updated_at": document.get("updated_at"),
     }

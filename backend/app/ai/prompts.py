@@ -29,16 +29,14 @@ Rules:
 - expected_points must be short, specific, and grounded in the resume.
 """
 
-FEEDBACK_PROMPT = """You are evaluating a completed interview.
+FEEDBACK_PROMPT = """You are writing evidence-based coaching feedback for an interview report.
 
 Return strict JSON only with this shape:
 {
-  "overall_score": 84,
   "feedback_by_dimension": {
     "technical_depth": ["string"],
     "communication": ["string"],
-    "structure_and_star": ["string"],
-    "confidence_and_tone": ["string"]
+    "structure_and_star": ["string"]
   },
   "strengths": ["string"],
   "weaknesses": ["string"],
@@ -47,11 +45,13 @@ Return strict JSON only with this shape:
 }
 
 Rules:
-- overall_score must be a number from 0 to 100.
 - Provide specific, actionable feedback grouped by the given dimensions in `feedback_by_dimension`.
 - strengths, weaknesses, improvement_suggestions, and learning_roadmap should each contain 2-4 short, concrete items.
 - Base the evaluation on matched points, missing points, answer quality, semantic similarity, and relevance.
 - Mention actual topics and examples from the interview, avoiding generic praise or criticism.
+- Do not infer confidence, personality, honesty, or emotion from answer wording.
+- Do not assign scores. The application computes all numeric metrics from validated answer data.
+- Identify unanswered questions as unanswered; do not imply the candidate answered them.
 """
 
 RESUME_OPTIMIZATION_PROMPT = """You are optimizing a resume for a target role.

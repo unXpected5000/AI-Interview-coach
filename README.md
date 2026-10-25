@@ -1,34 +1,81 @@
-# Multimodal AI Interview Coach
+# AI Interview Coach
 
-MVP Phase 1 foundation scaffold for a React + Tailwind frontend and FastAPI backend.
+A full-stack interview practice application. Candidates manage and build resumes, get role-relevant questions, practice by typing or speaking, use a call-style spoken interview room, receive question-level coaching and a final report, and export session results.
 
-This repository is intentionally prepared with clean module boundaries before feature implementation. Business logic for authentication, resume parsing, interview generation, evaluation, feedback, and dashboard analytics will be added in later phases.
+## Project layout
 
-## Applications
+- `backend/`: FastAPI application, MongoDB repositories, resume parsing, question generation/adaptation, answer evaluation, coaching reports, and export endpoints.
+- `frontend/`: React + Vite application, webcam and browser speech capture, interview flow, results, and resume management.
 
-- `backend/` - FastAPI API service, configuration layer, database connection shell, repository/service/module boundaries.
-- `frontend/` - React + Tailwind client shell, routing/layout placeholders, shared API client.
+## Workflow
 
-## Phase 1 Status
+1. Register or sign in.
+2. In Resume Studio, upload and manage a PDF, optimize it for a target role, or use the built-in Classic, Modern, and Compact resume layouts.
+3. Start an interview. The backend creates ten resume/skill-based questions. Choose question-by-question practice or the call-style live room.
+4. In the live room, browser text-to-speech reads each question, browser speech recognition supplies a live transcript, and typed mode is available at any time. A procedural Three.js interviewer responds to idle, listening, thinking, speaking, interruption, and disconnected states. Webcam access starts only after the candidate enables it, and approximate face tracking runs locally.
+5. The server derives filler and word counts from the transcript, computes speech timing from browser timing metadata, adapts the next question to the answer score, and may add a follow-up (up to three per interview).
+6. Complete or end a session to save coaching scores and a report. Export a completed report as PDF, or export session JSON/transcript. Delete a resume to remove its optimization history, interviews, answers, and scores.
 
-Created:
+## Report scoring and themes
 
-- Backend app shell
-- Frontend app shell
-- Environment variable examples
-- MongoDB connection module
-- Health endpoint
-- Modular folder structure
-- File responsibility documentation
+Readiness is a coaching category based on the overall performance score, not a hiring prediction. Defaults are 0–19 needs substantial practice, 20–39 developing, 40–59 moderate readiness, 60–79 good progress, and 80–100 strong interview readiness. Set `READINESS_DEVELOPING_THRESHOLD`, `READINESS_MODERATE_THRESHOLD`, `READINESS_GOOD_PROGRESS_THRESHOLD`, and `READINESS_STRONG_THRESHOLD` in `backend/.env` to change boundaries; values must be strictly increasing. Unanswered and skipped questions contribute zero, while failed evaluations are excluded from the score denominator and identified separately. Low completion is shown as a limited-sample assessment.
 
-Not implemented yet:
+The live webcam panel can be dragged with its header and resized from its corner; its position is constrained above the question panel. The light/dark theme toggle applies across the application while preserving accent colors.
 
-- Authentication
-- Resume upload
-- Skill extraction
-- Question generation
-- Interview sessions
-- Semantic evaluation
-- AI feedback
-- Dashboard data
+## Requirements
 
+- Python 3.11+
+- Node.js and npm
+- MongoDB (local or hosted)
+- Optional LLM provider credentials for generated questions, adaptations, and coaching. Fallback behavior is used when the provider is unavailable.
+
+## Configuration
+
+Copy `backend/.env.example` to `backend/.env` and set the MongoDB URI and any desired LLM credentials. Keep secrets out of source control. The frontend defaults to `http://localhost:8000/api`; set `VITE_API_BASE_URL` if your backend uses another address.
+
+## Run locally
+
+From the project folder, run `run_project.bat` for the one-step launcher, or use two terminals:
+
+```powershell
+cd backend
+.venv\Scripts\activate
+python -m uvicorn app.main:app --reload
+```
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The API documentation is at `http://127.0.0.1:8000/docs`.
+
+## Checks
+
+Run `check_project.bat` for the project checks. Individual commands:
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m pytest
+```
+
+```powershell
+cd frontend
+npm test
+npm run lint
+npm run build
+```
+
+Tests use local/fake dependencies where possible and do not require a live MongoDB or LLM service.
+
+## Main API areas
+
+- `/api/auth`: registration and authentication
+- `/api/resumes`: upload, list, view, role recommendations, and owner-scoped delete
+- `/api/interviews`: start, answer, complete, and list sessions
+- `/api/interviews/{id}/export/{pdf|json|transcript}`: owner-scoped downloads
+
+## Notes and limitations
+
+Speech timing is estimated from browser recognition timestamps; it is not a full acoustic analysis. On-device speech recognition depends on browser and language-pack support; otherwise recognition may use the browser's online service. The live room currently uses browser TTS/STT and is not connected to a realtime voice API. Realtime voice can use a billable API and is not enabled in this project. Camera frames are processed locally, and camera values are approximate framing signals only; they do not measure confidence, emotion, or interview quality. The procedural 3D model uses state-driven mouth motion tied to TTS playback; it is not phoneme-accurate lip synchronization. Camera and microphone access requires browser permission and a secure context (localhost is treated as secure by browsers).

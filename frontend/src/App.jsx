@@ -12,6 +12,8 @@ import RegisterPage from "./pages/RegisterPage.jsx";
 import ResultsPage from "./pages/ResultsPage.jsx";
 import ResumeOptimizerPage from "./pages/ResumeOptimizerPage.jsx";
 import ResumeUploadPage from "./pages/ResumeUploadPage.jsx";
+import ResumeBuilderPage from "./pages/ResumeBuilderPage.jsx";
+import LiveInterviewPage from "./pages/LiveInterviewPage.jsx";
 
 export default function App() {
   return (
@@ -29,9 +31,11 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/resumes/upload" element={<ResumeUploadPage />} />
+          <Route path="/resume-builder" element={<ResumeBuilderPage />} />
           <Route path="/interviews/start" element={<InterviewStartPage />} />
           <Route path="/resume-optimizer" element={<ResumeOptimizerPage />} />
           <Route path="/interviews/:interviewId" element={<InterviewPage />} />
+          <Route path="/interviews/:interviewId/live" element={<LiveInterviewPage />} />
           <Route path="/interviews/:interviewId/results" element={<ResultsPage />} />
           <Route path="/results/:interviewId" element={<ResultsPage />} />
         </Route>

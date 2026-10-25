@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 
 from app.api.deps import get_current_user, get_resume_service
 from app.schemas.resume_schema import ResumeListResponse, ResumeResponse, ResumeUploadResponse, RoleRecommendationResponse
@@ -25,6 +25,16 @@ async def list_resumes(
 ) -> dict:
     resumes = await resume_service.list_resumes(current_user["id"])
     return {"resumes": resumes}
+
+
+@router.delete("/{resume_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_resume(
+    resume_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    resume_service: Annotated[ResumeService, Depends(get_resume_service)],
+) -> Response:
+    await resume_service.delete_resume(resume_id, current_user["id"])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{resume_id}", response_model=ResumeResponse)

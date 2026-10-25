@@ -181,7 +181,7 @@ export default function ResumeOptimizerPage() {
             <div className="space-y-6">
               <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
                 <div className="rounded-lg bg-stone-950 p-5 text-white">
-                  <DonutScore label="ATS score" score={Math.round(result.result.ats_score)} />
+                  <DonutScore label="ATS score" score={Math.round(result.result.score_breakdown?.ats_score?.score || 0)} />
                 </div>
                 <div className="rounded-lg border border-stone-200 bg-stone-50 p-5">
                   <p className="text-sm font-bold uppercase tracking-wide text-teal-700">Optimized summary</p>
