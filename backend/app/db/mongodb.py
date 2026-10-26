@@ -36,6 +36,11 @@ async def ensure_indexes() -> None:
 
     database = mongo_client[settings.mongodb_db_name]
     await database[USERS_COLLECTION].create_index("email", unique=True)
+    await database[USERS_COLLECTION].create_index(
+        "google_id",
+        unique=True,
+        partialFilterExpression={"google_id": {"$type": "string"}},
+    )
     await database[RESUMES_COLLECTION].create_index("user_id")
     interview_collection = database[INTERVIEWS_COLLECTION]
     interview_indexes = await interview_collection.index_information()

@@ -10,6 +10,11 @@ export async function loginUser(payload) {
   return response.data;
 }
 
+export async function loginWithGoogle(credential) {
+  const response = await apiClient.post("/auth/google", { credential });
+  return response.data;
+}
+
 export async function getCurrentUser() {
   const response = await apiClient.get("/auth/me");
   return response.data;

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-import { getCurrentUser, loginUser, registerUser } from "../api/authApi.js";
+import { getCurrentUser, loginUser, loginWithGoogle as authenticateGoogleUser, registerUser } from "../api/authApi.js";
 import { shouldClearStoredSession } from "./session.js";
 import {
   clearAccessToken,
@@ -54,6 +54,13 @@ export function AuthProvider({ children }) {
     return data.user;
   }
 
+  async function loginWithGoogle(credential) {
+    const data = await authenticateGoogleUser(credential);
+    setAccessToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  }
+
   async function register(payload) {
     const data = await registerUser(payload);
     setAccessToken(data.access_token);
@@ -72,6 +79,7 @@ export function AuthProvider({ children }) {
       isAuthenticated: Boolean(user),
       isLoading,
       login,
+      loginWithGoogle,
       register,
       logout,
     }),

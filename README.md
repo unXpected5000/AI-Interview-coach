@@ -31,7 +31,7 @@ The live webcam panel can be dragged with its header and resized from its corner
 
 ## Configuration
 
-Copy `backend/.env.example` to `backend/.env` and set the MongoDB URI and any desired LLM credentials. Keep secrets out of source control. The frontend defaults to `http://localhost:8000/api`; set `VITE_API_BASE_URL` if your backend uses another address.
+Copy `backend/.env.example` to `backend/.env` and set the MongoDB URI and any desired LLM credentials. To enable Google sign-in, create a Google OAuth Web application client, set its ID as `GOOGLE_CLIENT_ID` in `backend/.env` and `VITE_GOOGLE_CLIENT_ID` in `frontend/.env` (copy `frontend/.env.example`). Register the frontend origins you use with Google, including `http://localhost:5173` and `http://127.0.0.1:5173`. The client ID is public; never put a client secret in the frontend. Keep other secrets out of source control. The frontend defaults to `http://localhost:8000/api`; set `VITE_API_BASE_URL` if your backend uses another address.
 
 ## Run locally
 
@@ -72,6 +72,7 @@ Tests use local/fake dependencies where possible and do not require a live Mongo
 ## Main API areas
 
 - `/api/auth`: registration and authentication
+- `/api/auth/google`: Google Identity Services credential verification and app-session creation
 - `/api/resumes`: upload, list, view, role recommendations, and owner-scoped delete
 - `/api/interviews`: start, answer, complete, and list sessions
 - `/api/interviews/{id}/export/{pdf|json|transcript}`: owner-scoped downloads

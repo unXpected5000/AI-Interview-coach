@@ -11,7 +11,7 @@ This repository is prepared for a static frontend on Cloudflare Pages and a Pyth
 ## API on Render
 
 1. Sign in to Render and create a Blueprint from this GitHub repository. Render reads the root `render.yaml`.
-2. Set `MONGODB_URI` to the hosted MongoDB connection string when prompted. Enter `GEMINI_API_KEY` only if you want live model-generated questions and feedback and have verified that requests stay within a free quota.
+2. Set `MONGODB_URI` to the hosted MongoDB connection string when prompted. Set `GOOGLE_CLIENT_ID` to the Google OAuth **Web application client ID** to enable Google sign-in. Enter `GEMINI_API_KEY` only if you want live model-generated questions and feedback and have verified that requests stay within a free quota.
 3. Wait for the API to deploy. Verify `https://<render-service>.onrender.com/api/health` returns `{"status":"ok"}`.
 4. The Pages Function proxies `/api/*` server-to-server, so browser requests are same-origin and CORS is not required. If you later change the frontend to call Render directly, set `BACKEND_CORS_ORIGINS` to the exact Pages origin and redeploy.
 
@@ -23,6 +23,9 @@ Create a Pages project connected to this repository with:
 - Build command: `npm ci && npm run build`
 - Build output directory: `dist`
 - Runtime environment variable `BACKEND_API_ORIGIN`: `https://<render-service>.onrender.com` (HTTPS origin only; no `/api` suffix)
+- Build environment variable `VITE_GOOGLE_CLIENT_ID`: the same Google OAuth Web application client ID configured on Render
+
+Create that OAuth client in Google Cloud Console. Add the exact local and deployed frontend origins to **Authorized JavaScript origins** (for example `http://localhost:5173`, `http://127.0.0.1:5173`, and your Cloudflare Pages domain). No client secret is used by this GIS credential flow. The backend validates each ID token signature, expiry, issuer, and audience before accepting it.
 
 Set the variable for both Production and Preview environments if you use preview deployments. The `public/_redirects` file enables client-side route fallback. The Pages Function returns a clear `503` if the backend origin is missing and rejects non-HTTPS origins.
 

@@ -14,6 +14,8 @@ services:
         sync: false
       - key: MONGODB_DB_NAME
         value: ai_interview_coach
+      - key: GOOGLE_CLIENT_ID
+        sync: false
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: LLM_PROVIDER

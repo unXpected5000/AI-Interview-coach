@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
+    google_client_id: str = ""
 
     openai_api_key: str = ""
     gemini_api_key: str = ""

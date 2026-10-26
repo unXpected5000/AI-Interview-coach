@@ -1,3 +1,5 @@
+import { createSpeechRecognition } from "./speechRecognition.js";
+
 export class MicrophoneDiagnosticError extends Error {
   constructor(code, message) {
     super(message);
@@ -36,6 +38,54 @@ export function speechRecognitionErrorMessage(errorCode) {
     aborted: "Speech recognition stopped.",
   };
   return messages[errorCode] ?? `Speech recognition failed (${errorCode || "unknown error"}). Check your microphone or type your answer.`;
+}
+
+export async function testSpeechRecognition({
+  createRecognition = createSpeechRecognition,
+  timeoutMs = 8000,
+  schedule = globalThis.setTimeout,
+  cancel = globalThis.clearTimeout,
+} = {}) {
+  const { recognition, processLocally } = await createRecognition();
+  if (!recognition) throw new MicrophoneDiagnosticError("unsupported", "Speech recognition is not supported in this browser.");
+
+  return new Promise((resolve, reject) => {
+    let transcript = "";
+    let settled = false;
+    let timer;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cancel(timer);
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try { recognition.stop(); } catch { /* It may already have stopped. */ }
+      if (error) reject(error);
+      else resolve({ transcript, processLocally });
+    };
+
+    recognition.onresult = (event) => {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        if (event.results[index].isFinal) transcript = `${transcript} ${event.results[index][0]?.transcript ?? ""}`.trim();
+      }
+      if (transcript) finish();
+    };
+    recognition.onerror = (event) => finish(new MicrophoneDiagnosticError(event.error, speechRecognitionErrorMessage(event.error)));
+    recognition.onend = () => {
+      if (transcript) finish();
+      else finish(new MicrophoneDiagnosticError("no-speech", speechRecognitionErrorMessage("no-speech")));
+    };
+    timer = schedule(() => {
+      if (transcript) finish();
+      else finish(new MicrophoneDiagnosticError("timeout", "Speech recognition heard no words. Check the selected microphone, browser speech service, and permissions."));
+    }, timeoutMs);
+    try {
+      recognition.start();
+    } catch (error) {
+      finish(new MicrophoneDiagnosticError("start-failed", error?.message || "Speech recognition could not start."));
+    }
+  });
 }
 
 export async function testMicrophoneInput({

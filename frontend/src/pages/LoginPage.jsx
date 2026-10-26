@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
+import GoogleSignInButton from "../components/auth/GoogleSignInButton.jsx";
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -32,6 +33,19 @@ export default function LoginPage() {
       setError(
         requestError.response?.data?.detail ?? "Login failed. Check your credentials.",
       );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleGoogleCredential(credential) {
+    setError("");
+    setIsSubmitting(true);
+    try {
+      await loginWithGoogle(credential);
+      navigate(destination, { replace: true });
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail ?? "Google sign-in failed. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -77,6 +91,9 @@ export default function LoginPage() {
           {isSubmitting ? "Signing in..." : "Sign in"}
         </button>
       </form>
+
+      <div className="my-5 flex items-center gap-3 text-xs text-gray-500"><span className="h-px flex-1 bg-gray-200" />or continue with<span className="h-px flex-1 bg-gray-200" /></div>
+      <GoogleSignInButton disabled={isSubmitting} onCredential={handleGoogleCredential} />
 
       <p className="mt-4 text-sm text-gray-600">
         Need an account?{" "}

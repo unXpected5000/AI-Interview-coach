@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { microphoneDiagnosticMessage, speechRecognitionErrorMessage, testMicrophoneInput } from "../src/utils/microphoneDiagnostic.js";
+import { microphoneDiagnosticMessage, speechRecognitionErrorMessage, testMicrophoneInput, testSpeechRecognition } from "../src/utils/microphoneDiagnostic.js";
 
 function createAudioHarness(byteLevel = 160) {
   const stopped = { value: false };
@@ -75,4 +75,28 @@ test("speech recognition failures have distinct actionable messages", () => {
   assert.match(speechRecognitionErrorMessage("audio-capture"), /microphone/);
   assert.match(speechRecognitionErrorMessage("network"), /network connection/);
   assert.match(speechRecognitionErrorMessage("not-allowed"), /Allow microphone access/);
+});
+
+test("speech recognition diagnostic returns a final transcript and stops the browser recognizer", async () => {
+  let stopped = false;
+  const recognition = {
+    start() {
+      Promise.resolve().then(() => this.onresult({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: "hello world" } }] }));
+    },
+    stop() { stopped = true; },
+  };
+  const result = await testSpeechRecognition({ createRecognition: async () => ({ recognition, processLocally: true }) });
+  assert.deepEqual(result, { transcript: "hello world", processLocally: true });
+  assert.equal(stopped, true);
+});
+
+test("speech recognition diagnostic exposes network failures", async () => {
+  const recognition = {
+    start() { Promise.resolve().then(() => this.onerror({ error: "network" })); },
+    stop() {},
+  };
+  await assert.rejects(
+    testSpeechRecognition({ createRecognition: async () => ({ recognition, processLocally: false }) }),
+    /network connection/,
+  );
 });

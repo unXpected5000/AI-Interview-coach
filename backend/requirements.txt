@@ -13,5 +13,6 @@ passlib[bcrypt]
 bcrypt==4.0.1
 python-jose[cryptography]
 email-validator
+google-auth>=2.30,<3
 pytest
 httpx
