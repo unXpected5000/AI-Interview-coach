@@ -5,7 +5,7 @@ import { completeInterview, getInterview, submitAnswer } from "../api/interviewA
 import { useWebcam } from "../hooks/useWebcam.js";
 import { useMediaPipe } from "../hooks/useMediaPipe.js";
 import { buildSpeechAnalysis } from "../utils/speechAnalysis.js";
-import { createSpeechRecognition, getSpeechRecognitionConstructor, getSpeechRecognitionMode } from "../utils/speechRecognition.js";
+import { collectSpeechRecognitionResults, createSpeechRecognition, getSpeechRecognitionConstructor, getSpeechRecognitionMode, isCurrentSpeechRecognitionEvent, isSpeechRecognitionSecureContext, resolveInterviewAnswer, scheduleSpeechRecognitionRestart } from "../utils/speechRecognition.js";
 import { microphoneDiagnosticMessage, speechRecognitionErrorMessage, testMicrophoneInput, testSpeechRecognition } from "../utils/microphoneDiagnostic.js";
 import InterviewerAvatar from "../components/interview/InterviewerAvatar.jsx";
 import { getInterviewerState } from "../utils/interviewState.js";
@@ -52,6 +52,7 @@ export default function LiveInterviewPage() {
   const finalTranscriptRef = useRef("");
   const transcriptRef = useRef("");
   const draftRef = useRef("");
+  const draftWasManuallyEditedRef = useRef(false);
   const timestampsRef = useRef([]);
   const answerStartRef = useRef(0);
   const voiceRef = useRef(null);
@@ -101,7 +102,7 @@ export default function LiveInterviewPage() {
   }, [currentQuestion?.question_id]);
   const completedCount = Object.keys(answers).length;
   const progress = questions.length ? Math.round((completedCount / questions.length) * 100) : 0;
-  const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
+  const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()) && isSpeechRecognitionSecureContext(), []);
   const avatarState = getInterviewerState({ callActive, error, wasInterrupted, isSpeaking, isListening });
 
   function stopSpeechAnimation() {
@@ -113,9 +114,11 @@ export default function LiveInterviewPage() {
 
   const updateTranscript = useCallback((text) => {
     transcriptRef.current = text;
-    draftRef.current = text;
     setTranscript(text);
-    setDraft(text);
+    if (!draftWasManuallyEditedRef.current) {
+      draftRef.current = text;
+      setDraft(text);
+    }
     const elapsed = answerStartRef.current ? (Date.now() - answerStartRef.current) / 1000 : 0;
     setAnalysis(buildSpeechAnalysis(text, elapsed, timestampsRef.current));
   }, []);
@@ -124,7 +127,9 @@ export default function LiveInterviewPage() {
     const recognitionGeneration = ++recognitionGenerationRef.current;
     if (!speechSupported) {
       setMicrophoneState("unavailable");
-      setError("Live speech recognition is not available in this browser. You can type your answer below.");
+      setError(isSpeechRecognitionSecureContext()
+        ? "Live speech recognition is not available in this browser. You can switch to text mode or type your answer below."
+        : "Speech recognition needs HTTPS or localhost. Use text mode or open the app on a secure origin.");
       setIsListening(false);
       return;
     }
@@ -136,6 +141,7 @@ export default function LiveInterviewPage() {
       setTranscript("");
       setDraft("");
       draftRef.current = "";
+      draftWasManuallyEditedRef.current = false;
       setAnalysis(null);
     }
     recognitionRetriesRef.current = 0;
@@ -147,21 +153,25 @@ export default function LiveInterviewPage() {
 
     function scheduleRecognitionRetry() {
       if (!shouldListenRef.current || recognitionRetryTimerRef.current) return;
-      if (recognitionRetriesRef.current >= 3) {
+      const retry = scheduleSpeechRecognitionRestart(recognitionRetriesRef.current, () => {
+        recognitionRetryTimerRef.current = null;
+        void createAndStart();
+      }, (callback, delay) => window.setTimeout(callback, delay));
+      if (retry === null) {
         shouldListenRef.current = false;
         setIsListening(false);
         setMicMuted(true);
         setMicrophoneState("unavailable");
-        setError("Speech recognition stopped after several retries. Your answer is safe; switch to text or restart the microphone.");
+        const hasPartialText = draftRef.current.trim() && !finalTranscriptRef.current.trim();
+        setError(hasPartialText
+          ? "Speech recognition stopped before finalizing those words. Review them and choose ‘Use partial transcript’ to submit as text, or edit/type an answer."
+          : "Speech recognition could not stay connected after several retries. You can retry the microphone or type your answer.");
         return;
       }
-      const delays = [250, 600, 1200];
-      const delay = delays[recognitionRetriesRef.current];
-      recognitionRetriesRef.current += 1;
-      recognitionRetryTimerRef.current = window.setTimeout(() => {
-        recognitionRetryTimerRef.current = null;
-        void createAndStart();
-      }, delay);
+      recognitionRetriesRef.current = retry.attempt;
+      setMicrophoneState("starting");
+      setError(`Speech recognition stopped unexpectedly. Restarting (${retry.attempt}/3)…`);
+      recognitionRetryTimerRef.current = retry.timer;
     }
 
     const createAndStart = async () => {
@@ -186,38 +196,34 @@ export default function LiveInterviewPage() {
         setIsListening(false);
         setMicMuted(true);
         setMicrophoneState("unavailable");
-        setError("Speech recognition is unavailable. You can type your answer.");
+        setError(result.unavailableReason === "secure_context"
+          ? "Speech recognition needs HTTPS or localhost. You can switch to text mode."
+          : "Speech recognition is unavailable in this browser. You can switch to text mode.");
         return;
       }
       setSpeechMode(processLocally ? "On-device speech" : "Browser speech service");
+      const seenFinalResultIndexes = new Set();
       recognition.onresult = (event) => {
-        if (recognitionGenerationRef.current !== recognitionGeneration || activeQuestionIdRef.current !== questionId) return;
-        let interim = "";
-        let receivedPhrase = false;
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index];
-          const phrase = result[0]?.transcript?.trim() ?? "";
-          if (phrase) receivedPhrase = true;
-          if (result.isFinal && phrase) {
-            recognitionRetriesRef.current = 0;
-            finalTranscriptRef.current = `${finalTranscriptRef.current} ${phrase}`.trim();
-            timestampsRef.current.push((Date.now() - answerStartRef.current) / 1000);
-          } else {
-            interim += `${phrase} `;
-          }
+        if (!isCurrentSpeechRecognitionEvent(recognition, recognitionRef.current, recognitionGeneration, recognitionGenerationRef.current, questionId, activeQuestionIdRef.current)) return;
+        const { finalPhrases, interimTranscript } = collectSpeechRecognitionResults(event, seenFinalResultIndexes);
+        if (finalPhrases.length) {
+          recognitionRetriesRef.current = 0;
+          finalTranscriptRef.current = `${finalTranscriptRef.current} ${finalPhrases.join(" ")}`.trim();
+          finalPhrases.forEach(() => timestampsRef.current.push((Date.now() - answerStartRef.current) / 1000));
+          setError("");
         }
-        if (receivedPhrase) setMicrophoneState("speech_detected");
-        updateTranscript(`${finalTranscriptRef.current} ${interim}`.trim());
+        if (finalPhrases.length || interimTranscript) setMicrophoneState("speech_detected");
+        updateTranscript(`${finalTranscriptRef.current} ${interimTranscript}`.trim());
       };
       recognition.onstart = () => {
-        if (recognitionGenerationRef.current === recognitionGeneration && activeQuestionIdRef.current === questionId && shouldListenRef.current) setMicrophoneState("listening");
+        if (isCurrentSpeechRecognitionEvent(recognition, recognitionRef.current, recognitionGeneration, recognitionGenerationRef.current, questionId, activeQuestionIdRef.current) && shouldListenRef.current) {
+          setMicrophoneState("listening");
+          setError("");
+        }
       };
       recognition.onerror = (event) => {
-        if (recognitionGenerationRef.current !== recognitionGeneration || activeQuestionIdRef.current !== questionId) return;
+        if (!isCurrentSpeechRecognitionEvent(recognition, recognitionRef.current, recognitionGeneration, recognitionGenerationRef.current, questionId, activeQuestionIdRef.current)) return;
         if (event.error === "network") {
-          shouldListenRef.current = false;
-          setIsListening(false);
-          setMicMuted(true);
           setMicrophoneState("network_error");
           setError(speechRecognitionErrorMessage("network"));
         } else if (event.error === "not-allowed" || event.error === "service-not-allowed" || event.error === "audio-capture") {
@@ -235,8 +241,8 @@ export default function LiveInterviewPage() {
         }
       };
       recognition.onend = () => {
-        if (recognitionGenerationRef.current !== recognitionGeneration) return;
-        if (recognitionRef.current === recognition) recognitionRef.current = null;
+        if (!isCurrentSpeechRecognitionEvent(recognition, recognitionRef.current, recognitionGeneration, recognitionGenerationRef.current, questionId, activeQuestionIdRef.current)) return;
+        recognitionRef.current = null;
         recognitionEndedRef.current?.();
         recognitionEndedRef.current = null;
         if (shouldListenRef.current && activeQuestionIdRef.current === questionId) {
@@ -251,6 +257,7 @@ export default function LiveInterviewPage() {
       try {
         recognition.start();
       } catch {
+        if (recognitionRef.current === recognition) recognitionRef.current = null;
         setMicrophoneState("starting");
         scheduleRecognitionRetry();
       }
@@ -354,7 +361,7 @@ export default function LiveInterviewPage() {
     recognitionRetryTimerRef.current = null;
     if (recognitionRef.current) {
       const captured = await stopRecognitionAndWait();
-      if (captured) updateTranscript(captured);
+      if (captured && !draftWasManuallyEditedRef.current) updateTranscript(captured);
     } else {
       shouldListenRef.current = false;
       recognitionGenerationRef.current += 1;
@@ -403,13 +410,13 @@ export default function LiveInterviewPage() {
     setIsListening(false);
     setMicMuted(true);
     setMicrophoneState("muted");
-    return transcriptRef.current;
+    return finalTranscriptRef.current;
   }
 
   async function handleSubmitAnswer() {
     if (!currentQuestion || isSaving) return;
     const captured = await stopRecognitionAndWait();
-    const spokenAnswer = draftRef.current.trim() || captured.trim();
+    const spokenAnswer = resolveInterviewAnswer(draftRef.current, captured, draftWasManuallyEditedRef.current);
     if (!spokenAnswer) {
       setError("I didn’t catch an answer. Try the microphone again or type a response.");
       return;
@@ -418,7 +425,7 @@ export default function LiveInterviewPage() {
     setError("");
     try {
       const duration = answerStartRef.current ? (Date.now() - answerStartRef.current) / 1000 : 0;
-      const isSpokenAnswer = interactionMode === "voice" && Boolean(captured.trim());
+      const isSpokenAnswer = interactionMode === "voice" && Boolean(captured.trim()) && !draftWasManuallyEditedRef.current;
       const speechAnalysis = isSpokenAnswer ? buildSpeechAnalysis(spokenAnswer, duration, timestampsRef.current) : undefined;
       const saved = await submitAnswer(interviewId, currentQuestion.question_id, spokenAnswer, {
         transcript: isSpokenAnswer ? captured : undefined,
@@ -462,10 +469,10 @@ export default function LiveInterviewPage() {
     stopSpeechAnimation();
     const captured = await stopRecognitionAndWait();
     try {
-      const unsavedAnswer = draftRef.current.trim() || captured.trim();
+      const unsavedAnswer = resolveInterviewAnswer(draftRef.current, captured, draftWasManuallyEditedRef.current);
       if (currentQuestion && unsavedAnswer && !answers[currentQuestion.question_id]) {
         const duration = answerStartRef.current ? (Date.now() - answerStartRef.current) / 1000 : 0;
-        const isSpokenAnswer = interactionMode === "voice" && Boolean(captured.trim());
+        const isSpokenAnswer = interactionMode === "voice" && Boolean(captured.trim()) && !draftWasManuallyEditedRef.current;
         const speechAnalysis = isSpokenAnswer ? buildSpeechAnalysis(unsavedAnswer, duration, timestampsRef.current) : undefined;
         const saved = await submitAnswer(interviewId, currentQuestion.question_id, unsavedAnswer, {
           transcript: isSpokenAnswer ? captured : undefined,
@@ -643,7 +650,8 @@ export default function LiveInterviewPage() {
             <div className="flex items-center justify-between"><h2 className="font-bold">Live transcript</h2><span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${isListening ? "bg-rose-100 text-rose-700" : "bg-stone-100 text-stone-500"}`}>{isListening ? "Listening" : isSpeaking ? "Interviewer speaking" : "Paused"}</span></div>
             {speechMode ? <p className="mt-2 text-[11px] font-semibold text-teal-700">{speechMode}</p> : null}
             <div className="mt-3 min-h-32 whitespace-pre-wrap rounded-lg bg-stone-50 p-3 text-sm leading-6 text-stone-700">{transcript || "Your recognized words will appear here as you speak."}</div>
-            <label className="mt-3 block text-xs font-bold text-stone-500">{interactionMode === "text" ? "Type your answer" : "Edit or type your answer"}<textarea className="mt-1 min-h-20 w-full rounded-lg border border-stone-200 p-3 text-sm" onChange={(event) => { draftRef.current = event.target.value; setDraft(event.target.value); }} value={draft} /></label>
+            <label className="mt-3 block text-xs font-bold text-stone-500">{interactionMode === "text" ? "Type your answer" : "Edit or type your answer"}<textarea className="mt-1 min-h-20 w-full rounded-lg border border-stone-200 p-3 text-sm" onChange={(event) => { draftRef.current = event.target.value; draftWasManuallyEditedRef.current = true; setDraft(event.target.value); }} value={draft} /></label>
+            {microphoneState === "unavailable" && draft.trim() && !finalTranscriptRef.current.trim() && !draftWasManuallyEditedRef.current ? <button className="mt-2 text-xs font-bold text-teal-700 underline" onClick={() => { draftWasManuallyEditedRef.current = true; setError("Partial transcript selected as text. Review it before submitting."); }} type="button">Use partial transcript as text</button> : null}
             {!speechSupported ? <p className="mt-2 text-xs text-amber-700">This browser does not expose SpeechRecognition. Typed answers are available in this room.</p> : null}
             <p className="mt-2 text-[11px] leading-4 text-stone-400">Voice mode uses on-device speech where supported, otherwise the browser’s speech service. Webcam is off until you enable it; its estimates run locally. The app stores answer transcripts and derived metrics, not raw microphone or video recordings.</p>
           </section>

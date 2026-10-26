@@ -75,6 +75,8 @@ test("speech recognition failures have distinct actionable messages", () => {
   assert.match(speechRecognitionErrorMessage("audio-capture"), /microphone/);
   assert.match(speechRecognitionErrorMessage("network"), /network connection/);
   assert.match(speechRecognitionErrorMessage("not-allowed"), /Allow microphone access/);
+  assert.match(speechRecognitionErrorMessage("service-not-allowed"), /browser's speech service is unavailable or blocked/);
+  assert.match(speechRecognitionErrorMessage("no-speech"), /No speech was detected/);
 });
 
 test("speech recognition diagnostic returns a final transcript and stops the browser recognizer", async () => {

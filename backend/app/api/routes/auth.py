@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.google_identity import (
     GoogleIdentityError,
     GoogleIdentityNotConfigured,
+    GoogleIdentityVerificationUnavailable,
     verify_google_id_token,
 )
 from app.schemas.auth_schema import GoogleLoginRequest, LoginRequest, RegisterRequest, TokenResponse
@@ -72,6 +73,12 @@ async def google_login(
         )
     except GoogleIdentityNotConfigured as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except GoogleIdentityVerificationUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in verification is temporarily unavailable. Please retry.",
+            headers={"Retry-After": "2"},
+        ) from exc
     except GoogleIdentityError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

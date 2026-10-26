@@ -33,7 +33,7 @@ export function speechRecognitionErrorMessage(errorCode) {
     "not-allowed": "Microphone access was blocked. Allow microphone access for this site in your browser settings, or type your answer.",
     "service-not-allowed": "The browser's speech service is unavailable or blocked. Try another supported browser or type your answer.",
     "audio-capture": "The browser could not find or open a microphone. Connect an input device or type your answer.",
-    network: "Browser speech recognition lost its network connection. Your typed answer is safe; retry when online or switch to text.",
+    network: "The browser speech service lost its network connection. Check connectivity; if it remains unavailable, use on-device recognition if supported or type your answer.",
     "no-speech": "No speech was detected. Check the microphone and speak clearly, or type your answer.",
     aborted: "Speech recognition stopped.",
   };
