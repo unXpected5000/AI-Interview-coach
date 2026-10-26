@@ -3,6 +3,14 @@ from app.core.google_identity import GoogleIdentityError, normalize_google_claim
 from app.core.security import hash_password, verify_password
 
 
+def test_google_token_verifier_transport_dependency_is_installed() -> None:
+    from google.auth.transport.requests import Request
+    from google.oauth2 import id_token
+
+    assert Request is not None
+    assert id_token.verify_oauth2_token is not None
+
+
 def test_hash_password_does_not_store_plain_text() -> None:
     password = "strong-password"
 
