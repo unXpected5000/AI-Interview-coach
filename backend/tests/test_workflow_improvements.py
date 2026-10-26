@@ -66,6 +66,45 @@ def test_question_difficulty_thresholds_and_fallback_adaptation():
     assert "trade-offs" in text
 
 
+def test_question_generation_validation_accepts_valid_medium_plan_without_name_error():
+    service = QuestionService(UnavailableLLM())
+    plan = service._build_topic_plan({"skills": ["Python"]}, ["Python"])
+    candidate_questions = [
+        {
+            "question": f"Explain {item['topic_focus']}.",
+            "expected_answer": f"A clear explanation of {item['topic_focus']}.",
+            "expected_points": ["definition", "example"],
+            "question_type": item["question_type"],
+            "topic_focus": item["topic_focus"],
+            "skill": item["skill"],
+        }
+        for item in plan
+    ]
+
+    questions = service._validate_questions(candidate_questions, plan)
+
+    assert len(questions) == 10
+    assert {question["difficulty"] for question in questions} == {"medium"}
+
+
+def test_question_generation_validation_rejects_unknown_difficulty_safely():
+    service = QuestionService(UnavailableLLM())
+    plan = service._build_topic_plan({"skills": ["Python"]}, ["Python"])
+    plan[0]["difficulty"] = "impossible"
+    candidate_questions = [
+        {
+            "question": f"Explain {item['topic_focus']}.",
+            "expected_answer": f"A clear explanation of {item['topic_focus']}.",
+            "expected_points": ["definition"],
+            "question_type": item["question_type"],
+            "topic_focus": item["topic_focus"],
+        }
+        for item in plan
+    ]
+
+    assert service._validate_questions(candidate_questions, plan) == []
+
+
 def test_follow_up_fallback_is_specific_and_bounded():
     service = QuestionService(UnavailableLLM())
     text, _, _ = service._follow_up_fallback(

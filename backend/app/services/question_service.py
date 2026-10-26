@@ -10,6 +10,7 @@ from app.utils.mongo import make_json_safe
 
 
 QUESTION_TYPES = ("conceptual", "practical", "scenario")
+QUESTION_DIFFICULTIES = {"easy", "medium", "hard"}
 QUESTION_TYPE_SEQUENCE = [
     "conceptual",
     "practical",
@@ -354,13 +355,14 @@ class QuestionService:
             ("debugging", "How would you debug issues around {topic}?"),
         ]
 
-        index = 0
-        while len(unique) < 10 and source_skills:
-            skill = source_skills[index % len(source_skills)]
-            suffix, context = expansion_templates[len(unique) % len(expansion_templates)]
-            topic_focus = f"{skill} {suffix}"
-            key = self._normalize_key(topic_focus)
-            if key not in seen:
+        for skill in source_skills:
+            for suffix, context in expansion_templates:
+                if len(unique) >= 10:
+                    break
+                topic_focus = f"{skill} {suffix}"
+                key = self._normalize_key(topic_focus)
+                if key in seen:
+                    continue
                 seen.add(key)
                 unique.append(
                     {
@@ -372,7 +374,8 @@ class QuestionService:
                         "highlights": [],
                     }
                 )
-            index += 1
+            if len(unique) >= 10:
+                break
 
         while len(unique) < 10:
             topic_focus = f"resume detail {len(unique) + 1}"
@@ -415,7 +418,7 @@ class QuestionService:
             difficulty = str(plan_item.get("difficulty", "medium")).lower().strip()
             question_type = str(question.get("question_type", plan_item.get("question_type", "conceptual"))).lower().strip()
             topic_focus = str(question.get("topic_focus", plan_item.get("topic_focus", ""))).strip()
-            if difficulty not in difficulty_counts or question_type not in QUESTION_TYPES or not topic_focus:
+            if difficulty not in QUESTION_DIFFICULTIES or question_type not in QUESTION_TYPES or not topic_focus:
                 return []
             if self._normalize_key(topic_focus) in normalized_topics:
                 return []
