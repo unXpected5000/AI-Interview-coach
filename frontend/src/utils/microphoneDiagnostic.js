@@ -1,4 +1,6 @@
 import { createSpeechRecognition } from "./speechRecognition.js";
+import { startLocalSpeechCapture } from "./localSpeechCapture.js";
+import { transcribeAudioBlob } from "./localSpeechTranscription.js";
 
 export class MicrophoneDiagnosticError extends Error {
   constructor(code, message) {
@@ -33,7 +35,7 @@ export function speechRecognitionErrorMessage(errorCode) {
     "not-allowed": "Microphone access was blocked. Allow microphone access for this site in your browser settings, or type your answer.",
     "service-not-allowed": "The browser's speech service is unavailable or blocked. Try another supported browser or type your answer.",
     "audio-capture": "The browser could not find or open a microphone. Connect an input device or type your answer.",
-    network: "The browser speech service lost its network connection. Check connectivity; if it remains unavailable, use on-device recognition if supported or type your answer.",
+    network: "The browser speech service lost its network connection. This app can use its local transcription backup; if that is unavailable, type your answer.",
     "no-speech": "No speech was detected. Check the microphone and speak clearly, or type your answer.",
     aborted: "Speech recognition stopped.",
   };
@@ -45,11 +47,50 @@ export async function testSpeechRecognition({
   timeoutMs = 8000,
   schedule = globalThis.setTimeout,
   cancel = globalThis.clearTimeout,
+  useLocalFallback = false,
+  onStatus = () => {},
+  captureAudio = startLocalSpeechCapture,
+  transcribeAudio = transcribeAudioBlob,
 } = {}) {
-  const { recognition, processLocally } = await createRecognition();
-  if (!recognition) throw new MicrophoneDiagnosticError("unsupported", "Speech recognition is not supported in this browser.");
+  let localCapture = null;
+  let localCaptureError = null;
+  if (useLocalFallback) {
+    try {
+      localCapture = await captureAudio();
+    } catch (error) {
+      localCaptureError = error;
+    }
+  }
+  const transcribeLocally = async () => {
+    if (!localCapture) throw localCaptureError ?? new MicrophoneDiagnosticError("unsupported", "Local speech capture is unavailable.");
+    onStatus("Browser recognition did not return a transcript. Preparing on-device Whisper…");
+    const audio = await localCapture.stop();
+    localCapture = null;
+    const transcript = await transcribeAudio(audio, {
+      onProgress: (progress) => {
+        if (progress?.status === "progress") onStatus(`Preparing offline speech model (${Math.round(progress.progress ?? 0)}%)…`);
+      },
+    });
+    if (!transcript) throw new MicrophoneDiagnosticError("no-speech", "On-device speech recognition heard no clear words.");
+    return { transcript, processLocally: true, engine: "Whisper on this device" };
+  };
 
-  return new Promise((resolve, reject) => {
+  let recognition;
+  let processLocally;
+  try {
+    ({ recognition, processLocally } = await createRecognition());
+  } catch (error) {
+    if (useLocalFallback && localCapture) return transcribeLocally();
+    localCapture?.cancel();
+    throw error;
+  }
+  if (!recognition) {
+    if (useLocalFallback && localCapture) return transcribeLocally();
+    throw new MicrophoneDiagnosticError("unsupported", "Speech recognition is not supported in this browser.");
+  }
+
+  try {
+    const result = await new Promise((resolve, reject) => {
     let transcript = "";
     let settled = false;
     let timer;
@@ -85,7 +126,16 @@ export async function testSpeechRecognition({
     } catch (error) {
       finish(new MicrophoneDiagnosticError("start-failed", error?.message || "Speech recognition could not start."));
     }
-  });
+    });
+    localCapture?.cancel();
+    return { ...result, processLocally };
+  } catch (error) {
+    if (useLocalFallback && localCapture && ["network", "service-not-allowed", "no-speech", "timeout", "start-failed"].includes(error?.code)) {
+      return transcribeLocally();
+    }
+    localCapture?.cancel();
+    throw error;
+  }
 }
 
 export async function testMicrophoneInput({

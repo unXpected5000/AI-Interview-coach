@@ -102,3 +102,21 @@ test("speech recognition diagnostic exposes network failures", async () => {
     /network connection/,
   );
 });
+
+test("speech recognition diagnostic falls back to a local transcript after a browser network error", async () => {
+  let audioStopped = false;
+  class NetworkFailingRecognition {
+    start() { this.onerror?.({ error: "network" }); }
+    stop() {}
+  }
+  const result = await testSpeechRecognition({
+    useLocalFallback: true,
+    createRecognition: async () => ({ recognition: new NetworkFailingRecognition(), processLocally: false }),
+    captureAudio: async () => ({ stop: async () => { audioStopped = true; return new Blob(["audio"]); }, cancel() {} }),
+    transcribeAudio: async () => "recognized on device",
+  });
+
+  assert.equal(audioStopped, true);
+  assert.equal(result.transcript, "recognized on device");
+  assert.equal(result.engine, "Whisper on this device");
+});
