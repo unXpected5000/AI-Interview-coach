@@ -21,11 +21,13 @@ test("local speech capture records in memory and releases its microphone track o
     mediaDevices: { getUserMedia: async () => stream },
     MediaRecorderConstructor: FakeRecorder,
   });
+  recorder.ondataavailable({ data: new Blob(["first-chunk"], { type: recorder.mimeType }) });
+  assert.equal(await capture.snapshot().text(), "first-chunk");
   const blob = await capture.stop();
 
   assert.equal(recorder.stream, stream);
   assert.match(blob.type, /audio\/webm/);
-  assert.equal(await blob.text(), "audio-bytes");
+  assert.equal(await blob.text(), "first-chunkaudio-bytes");
   assert.equal(track.stopped, true);
 });
 test("local speech audio decoder mixes channels and resamples to 16 kHz", async () => {

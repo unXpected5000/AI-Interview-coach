@@ -5,14 +5,14 @@ A full-stack interview practice application. Candidates manage and build resumes
 ## Project layout
 
 - `backend/`: FastAPI application, MongoDB repositories, resume parsing, question generation/adaptation, answer evaluation, coaching reports, and export endpoints.
-- `frontend/`: React + Vite application, webcam and browser speech capture, interview flow, results, and resume management.
+- `frontend/`: React + Vite application, webcam capture, browser speech recognition with a local Whisper fallback, interview flow, results, and resume management.
 
 ## Workflow
 
 1. Register or sign in.
 2. In Resume Studio, upload and manage a PDF, optimize it for a target role, or use the built-in Classic, Modern, and Compact resume layouts.
 3. Start an interview. The backend creates ten resume/skill-based questions. Choose question-by-question practice or the call-style live room.
-4. In the live room, browser text-to-speech reads each question, browser speech recognition supplies a live transcript, and typed mode is available at any time. A procedural Three.js interviewer responds to idle, listening, thinking, speaking, interruption, and disconnected states. Webcam access starts only after the candidate enables it, and approximate face tracking runs locally.
+4. In the live room, browser text-to-speech reads each question. Browser speech recognition supplies the lowest-latency transcript when available; if it disconnects or is unsupported, an in-browser Whisper model shows a rolling transcript preview and rechecks the complete answer when submitted. Typed mode is always available. A procedural Three.js interviewer responds to idle, listening, thinking, speaking, interruption, and disconnected states. Webcam access starts only after the candidate enables it, and approximate face tracking runs locally.
 5. The server derives filler and word counts from the transcript, computes speech timing from browser timing metadata, adapts the next question to the answer score, and may add a follow-up (up to three per interview).
 6. Complete or end a session to save coaching scores and a report. Export a completed report as PDF, or export session JSON/transcript. Delete a resume to remove its optimization history, interviews, answers, and scores.
 
@@ -21,6 +21,10 @@ A full-stack interview practice application. Candidates manage and build resumes
 Readiness is a coaching category based on the overall performance score, not a hiring prediction. Defaults are 0–19 needs substantial practice, 20–39 developing, 40–59 moderate readiness, 60–79 good progress, and 80–100 strong interview readiness. Set `READINESS_DEVELOPING_THRESHOLD`, `READINESS_MODERATE_THRESHOLD`, `READINESS_GOOD_PROGRESS_THRESHOLD`, and `READINESS_STRONG_THRESHOLD` in `backend/.env` to change boundaries; values must be strictly increasing. Unanswered and skipped questions contribute zero, while failed evaluations are excluded from the score denominator and identified separately. Low completion is shown as a limited-sample assessment.
 
 The live webcam panel can be dragged with its header and resized from its corner; its position is constrained above the question panel. The light/dark theme toggle applies across the application while preserving accent colors.
+
+## Speech recognition and privacy
+
+The browser's SpeechRecognition service may send microphone audio to the browser's recognition provider. The Whisper fallback runs in a web worker on the candidate's device and keeps its backup audio in memory only; it does not upload or persist the recording. Only the transcript is submitted to this application. The fallback currently recognizes English and downloads the quantized model (about 45 MB) from the public Hugging Face model repository on first use; the browser caches it for later sessions. A live fallback preview runs on short overlapping windows, then the complete recording is transcribed once more when the answer is finished. If model download or local inference fails, typed answers remain available.
 
 ## Requirements
 

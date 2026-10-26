@@ -38,6 +38,9 @@ export async function startLocalSpeechCapture({
   let stopping;
   const release = () => stream.getTracks?.().forEach((track) => track.stop());
   return {
+    snapshot() {
+      return new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+    },
     async stop() {
       if (stoppedBlob) return stoppedBlob;
       if (stopping) return stopping;

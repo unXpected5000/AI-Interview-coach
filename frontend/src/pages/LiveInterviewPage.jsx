@@ -11,11 +11,14 @@ import InterviewerAvatar from "../components/interview/InterviewerAvatar.jsx";
 import { getInterviewerState } from "../utils/interviewState.js";
 import FloatingWebcamPanel from "../components/interview/FloatingWebcamPanel.jsx";
 import { startLocalSpeechCapture } from "../utils/localSpeechCapture.js";
-import { terminateLocalSpeechWorker, transcribeAudioBlob, warmLocalSpeechModel } from "../utils/localSpeechTranscription.js";
+import { mergeSpeechTranscriptSegments, terminateLocalSpeechWorker, transcribeAudioBlob, transcribeAudioWindow, warmLocalSpeechModel } from "../utils/localSpeechTranscription.js";
 
 function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
+
+const LOCAL_TRANSCRIPT_PREVIEW_INTERVAL_MS = 10_000;
+const LOCAL_TRANSCRIPT_PREVIEW_OVERLAP_SAMPLES = 32_000;
 
 export default function LiveInterviewPage() {
   const { interviewId } = useParams();
@@ -50,6 +53,13 @@ export default function LiveInterviewPage() {
   const recognitionRetryTimerRef = useRef(null);
   const localSpeechCaptureRef = useRef(null);
   const localSpeechBlobRef = useRef(null);
+  const localSpeechBlobsRef = useRef([]);
+  const localPreviewTimerRef = useRef(null);
+  const localPreviewPromiseRef = useRef(null);
+  const localPreviewGenerationRef = useRef(0);
+  const localPreviewLastSampleRef = useRef(0);
+  const localPreviewTranscriptRef = useRef("");
+  const usingLocalSpeechFallbackRef = useRef(false);
   const shouldListenRef = useRef(false);
   const activeQuestionIdRef = useRef(null);
   const interruptedQuestionRef = useRef(null);
@@ -93,6 +103,8 @@ export default function LiveInterviewPage() {
       recognitionRef.current?.abort?.();
       localSpeechCaptureRef.current?.cancel?.();
       localSpeechCaptureRef.current = null;
+      window.clearTimeout(localPreviewTimerRef.current);
+      localPreviewGenerationRef.current += 1;
       terminateLocalSpeechWorker();
       window.clearTimeout(recognitionRetryTimerRef.current);
       window.clearTimeout(interruptionTimeoutRef.current);
@@ -142,6 +154,13 @@ export default function LiveInterviewPage() {
       draftRef.current = "";
       draftWasManuallyEditedRef.current = false;
       localSpeechBlobRef.current = null;
+      localSpeechBlobsRef.current = [];
+      localPreviewTranscriptRef.current = "";
+      localPreviewLastSampleRef.current = 0;
+      usingLocalSpeechFallbackRef.current = false;
+      window.clearTimeout(localPreviewTimerRef.current);
+      localPreviewTimerRef.current = null;
+      localPreviewGenerationRef.current += 1;
       setAnalysis(null);
     }
     recognitionRetriesRef.current = 0;
@@ -155,11 +174,62 @@ export default function LiveInterviewPage() {
       if (localSpeechCaptureRef.current) return true;
       try {
         localSpeechCaptureRef.current = await startLocalSpeechCapture();
+        localPreviewLastSampleRef.current = 0;
         return true;
       } catch (captureError) {
         setError(`On-device transcription backup is unavailable: ${captureError?.message ?? "microphone capture failed"}. Browser recognition or typed answers may still work.`);
         return false;
       }
+    }
+
+    function scheduleLocalTranscriptPreview() {
+      if (!usingLocalSpeechFallbackRef.current || !localSpeechCaptureRef.current || localPreviewTimerRef.current) return;
+      const generation = localPreviewGenerationRef.current;
+      const questionId = activeQuestionIdRef.current;
+      const capture = localSpeechCaptureRef.current;
+      localPreviewTimerRef.current = window.setTimeout(async () => {
+        localPreviewTimerRef.current = null;
+        if (generation !== localPreviewGenerationRef.current
+          || questionId !== activeQuestionIdRef.current
+          || capture !== localSpeechCaptureRef.current
+          || !usingLocalSpeechFallbackRef.current) return;
+
+        const snapshot = capture.snapshot();
+        if (!snapshot.size) {
+          scheduleLocalTranscriptPreview();
+          return;
+        }
+        const startSample = Math.max(0, localPreviewLastSampleRef.current - LOCAL_TRANSCRIPT_PREVIEW_OVERLAP_SAMPLES);
+        const previewTask = transcribeAudioWindow(snapshot, {
+          startSample,
+          onProgress: (progress) => {
+            if (progress?.status === "progress" && generation === localPreviewGenerationRef.current) {
+              setError(`Preparing live on-device transcript (${Math.round(progress.progress ?? 0)}%)…`);
+            }
+          },
+        });
+        localPreviewPromiseRef.current = previewTask;
+        try {
+          const { text, sampleCount } = await previewTask;
+          if (generation !== localPreviewGenerationRef.current
+            || questionId !== activeQuestionIdRef.current
+            || capture !== localSpeechCaptureRef.current) return;
+          localPreviewLastSampleRef.current = sampleCount;
+          if (text) {
+            localPreviewTranscriptRef.current = mergeSpeechTranscriptSegments(localPreviewTranscriptRef.current, text);
+            updateTranscript(`${finalTranscriptRef.current} ${localPreviewTranscriptRef.current}`.trim());
+            setMicrophoneState("speech_detected");
+            setError("Live transcript is running on this device. Finalizing the complete answer when you finish.");
+          }
+        } catch (previewError) {
+          if (generation === localPreviewGenerationRef.current) {
+            setError(`Live on-device preview is unavailable: ${previewError?.message ?? "transcription failed"}. The app will still try once when you finish.`);
+          }
+        } finally {
+          if (localPreviewPromiseRef.current === previewTask) localPreviewPromiseRef.current = null;
+          scheduleLocalTranscriptPreview();
+        }
+      }, LOCAL_TRANSCRIPT_PREVIEW_INTERVAL_MS);
     }
 
     function scheduleRecognitionRetry() {
@@ -180,9 +250,11 @@ export default function LiveInterviewPage() {
             ? "Speech recognition stopped before finalizing those words. Review them and choose ‘Use partial transcript’ to submit as text, or edit/type an answer."
             : "Speech recognition could not stay connected and local capture was unavailable. Retry the microphone or type your answer.");
         if (localSpeechCaptureRef.current) {
+          usingLocalSpeechFallbackRef.current = true;
           setMicrophoneState("local_fallback");
           setIsListening(true);
           setMicMuted(false);
+          scheduleLocalTranscriptPreview();
         }
         return;
       }
@@ -198,6 +270,7 @@ export default function LiveInterviewPage() {
       const hasLocalCapture = await ensureLocalAudioCapture();
       if (!speechSupported) {
         shouldListenRef.current = false;
+        usingLocalSpeechFallbackRef.current = true;
         setSpeechMode("On-device Whisper backup");
         setMicrophoneState(hasLocalCapture ? "local_fallback" : "unavailable");
         setIsListening(hasLocalCapture);
@@ -207,43 +280,21 @@ export default function LiveInterviewPage() {
           void warmLocalSpeechModel((progress) => {
             if (progress?.status === "progress") setError(`Preparing offline speech model (${Math.round(progress.progress ?? 0)}%)…`);
           }).catch((modelError) => setError(`Offline speech model could not be prepared: ${modelError.message}. You can still type your answer.`));
+          scheduleLocalTranscriptPreview();
         }
         return;
       }
-      const questionId = activeQuestionIdRef.current;
-      let result;
-      try {
-        result = await createSpeechRecognition((message) => setError(message));
-      } catch {
-        shouldListenRef.current = false;
-        setIsListening(false);
-        setMicMuted(true);
-        setMicrophoneState("unavailable");
-        setError("Could not start speech recognition. Type your answer or retry the microphone.");
-        return;
-      }
-      const { recognition, processLocally } = result;
-      if (!shouldListenRef.current || recognitionGeneration !== recognitionGenerationRef.current || activeQuestionIdRef.current !== questionId) return;
-      if (!recognition) {
-        shouldListenRef.current = false;
-        setIsListening(false);
-        setMicMuted(true);
-        setMicrophoneState("unavailable");
-        setError(result.unavailableReason === "secure_context"
-          ? "Speech recognition needs HTTPS or localhost. You can switch to text mode."
-          : "Speech recognition is unavailable in this browser. You can switch to text mode.");
-        return;
-      }
-      setSpeechMode(processLocally ? "On-device speech" : "Browser speech service");
       const useLocalSpeechFallback = (reason) => {
         shouldListenRef.current = false;
         if (localSpeechCaptureRef.current) {
+          usingLocalSpeechFallbackRef.current = true;
           setSpeechMode("On-device Whisper backup");
           setMicrophoneState("local_fallback");
           setIsListening(true);
           setMicMuted(false);
           setError(`${reason} Your voice is still being captured locally for transcription when you finish.`);
           void warmLocalSpeechModel().catch((modelError) => setError(`Offline speech model could not be prepared: ${modelError.message}. You can type your answer.`));
+          scheduleLocalTranscriptPreview();
           return;
         }
         setMicrophoneState("permission_error");
@@ -251,6 +302,23 @@ export default function LiveInterviewPage() {
         setMicMuted(true);
         setError(`${reason} Microphone capture was also unavailable; type your answer or retry microphone access.`);
       };
+      const questionId = activeQuestionIdRef.current;
+      let result;
+      try {
+        result = await createSpeechRecognition((message) => setError(message));
+      } catch {
+        useLocalSpeechFallback("Could not start browser speech recognition.");
+        return;
+      }
+      const { recognition, processLocally } = result;
+      if (!shouldListenRef.current || recognitionGeneration !== recognitionGenerationRef.current || activeQuestionIdRef.current !== questionId) return;
+      if (!recognition) {
+        useLocalSpeechFallback(result.unavailableReason === "secure_context"
+          ? "Speech recognition needs HTTPS or localhost. You can switch to text mode."
+          : "Speech recognition is unavailable in this browser.");
+        return;
+      }
+      setSpeechMode(processLocally ? "On-device speech" : "Browser speech service");
       const seenFinalResultIndexes = new Set();
       recognition.onresult = (event) => {
         if (!isCurrentSpeechRecognitionEvent(recognition, recognitionRef.current, recognitionGeneration, recognitionGenerationRef.current, questionId, activeQuestionIdRef.current)) return;
@@ -273,6 +341,7 @@ export default function LiveInterviewPage() {
       recognition.onerror = (event) => {
         if (!isCurrentSpeechRecognitionEvent(recognition, recognitionRef.current, recognitionGeneration, recognitionGenerationRef.current, questionId, activeQuestionIdRef.current)) return;
         if (event.error === "network") {
+          usingLocalSpeechFallbackRef.current = true;
           setMicrophoneState("network_error");
           setSpeechMode("Browser speech + on-device fallback");
           setError(localSpeechCaptureRef.current
@@ -281,6 +350,7 @@ export default function LiveInterviewPage() {
           void warmLocalSpeechModel((progress) => {
             if (progress?.status === "progress") setError(`Browser speech is unavailable. Preparing offline speech model (${Math.round(progress.progress ?? 0)}%)…`);
           }).catch(() => {});
+          scheduleLocalTranscriptPreview();
         } else if (event.error === "not-allowed" || event.error === "service-not-allowed" || event.error === "audio-capture") {
           const message = speechRecognitionErrorMessage(event.error);
           if (localSpeechCaptureRef.current) useLocalSpeechFallback(message);
@@ -422,7 +492,7 @@ export default function LiveInterviewPage() {
     if (mode === interactionMode) return;
     window.clearTimeout(recognitionRetryTimerRef.current);
     recognitionRetryTimerRef.current = null;
-    if (recognitionRef.current) {
+    if (recognitionRef.current || localSpeechCaptureRef.current || localSpeechBlobRef.current?.size) {
       let captured = await stopRecognitionAndWait();
       captured = await getFinalAnswerTranscript(captured);
       if (captured && !draftWasManuallyEditedRef.current) updateTranscript(captured);
@@ -449,6 +519,9 @@ export default function LiveInterviewPage() {
     shouldListenRef.current = false;
     window.clearTimeout(recognitionRetryTimerRef.current);
     recognitionRetryTimerRef.current = null;
+    window.clearTimeout(localPreviewTimerRef.current);
+    localPreviewTimerRef.current = null;
+    localPreviewGenerationRef.current += 1;
     const activeRecognition = recognitionRef.current;
     if (activeRecognition) {
       let endTimer;
@@ -474,11 +547,13 @@ export default function LiveInterviewPage() {
     if (localSpeechCaptureRef.current) {
       try {
         localSpeechBlobRef.current = await localSpeechCaptureRef.current.stop();
+        if (localSpeechBlobRef.current?.size) localSpeechBlobsRef.current.push(localSpeechBlobRef.current);
       } catch (captureError) {
         setError(`Could not finish local microphone capture: ${captureError?.message ?? "capture failed"}.`);
       }
       localSpeechCaptureRef.current = null;
     }
+    if (localPreviewPromiseRef.current) await localPreviewPromiseRef.current.catch(() => {});
     setIsListening(false);
     setMicMuted(true);
     setMicrophoneState("muted");
@@ -486,16 +561,33 @@ export default function LiveInterviewPage() {
   }
 
   async function getFinalAnswerTranscript(captured) {
-    if (captured.trim() || draftWasManuallyEditedRef.current || !localSpeechBlobRef.current?.size) return captured;
+    if (draftWasManuallyEditedRef.current) {
+      localSpeechBlobRef.current = null;
+      localSpeechBlobsRef.current = [];
+      usingLocalSpeechFallbackRef.current = false;
+      return captured;
+    }
+    const shouldUseLocalFallback = usingLocalSpeechFallbackRef.current || !captured.trim();
+    const localAudioParts = localSpeechBlobsRef.current.length ? localSpeechBlobsRef.current : [localSpeechBlobRef.current].filter((blob) => blob?.size);
+    if (!localAudioParts.length || !shouldUseLocalFallback) {
+      localSpeechBlobRef.current = null;
+      localSpeechBlobsRef.current = [];
+      usingLocalSpeechFallbackRef.current = false;
+      return captured;
+    }
     setMicrophoneState("transcribing");
-    setError("Transcribing your answer on this device. The audio is not uploaded.");
+    setError("Transcribing your backup recording on this device. This local fallback does not upload the recording.");
     try {
-      const text = await transcribeAudioBlob(localSpeechBlobRef.current, {
-        onProgress: (progress) => {
-          if (progress?.status === "progress") setError(`Preparing offline speech model (${Math.round(progress.progress ?? 0)}%)…`);
-          else if (progress?.status === "status") setError(progress.message);
-        },
-      });
+      let text = "";
+      for (const audioPart of localAudioParts) {
+        const partText = await transcribeAudioBlob(audioPart, {
+          onProgress: (progress) => {
+            if (progress?.status === "progress") setError(`Preparing offline speech model (${Math.round(progress.progress ?? 0)}%)…`);
+            else if (progress?.status === "status") setError(progress.message);
+          },
+        });
+        text = mergeSpeechTranscriptSegments(text, partText);
+      }
       if (text) {
         finalTranscriptRef.current = text;
         updateTranscript(text);
@@ -505,13 +597,15 @@ export default function LiveInterviewPage() {
         setMicrophoneState("unavailable");
         setError("On-device transcription found no clear speech. Check your mic level, try again, or type your answer.");
       }
-      return text;
+      return text || localPreviewTranscriptRef.current || captured;
     } catch (transcriptionError) {
       setMicrophoneState("unavailable");
       setError(`On-device transcription failed: ${transcriptionError?.message ?? "model unavailable"}. Your audio was kept locally only for this attempt; type your answer or retry.`);
-      return "";
+      return localPreviewTranscriptRef.current || captured;
     } finally {
       localSpeechBlobRef.current = null;
+      localSpeechBlobsRef.current = [];
+      usingLocalSpeechFallbackRef.current = false;
     }
   }
 
@@ -567,6 +661,8 @@ export default function LiveInterviewPage() {
   }
 
   async function handleEndCall() {
+    if (isSaving) return;
+    setIsSaving(true);
     speechGenerationRef.current += 1;
     window.speechSynthesis?.cancel();
     stopSpeechAnimation();
@@ -594,6 +690,7 @@ export default function LiveInterviewPage() {
       setCallActive(false);
       setIsSpeaking(false);
       setMicrophoneState("stopped");
+      setIsSaving(false);
     }
   }
 
@@ -735,8 +832,8 @@ export default function LiveInterviewPage() {
               <button className="rounded-full bg-emerald-400 px-6 py-3 text-sm font-black text-stone-950 hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running} onClick={handleJoinCall} type="button">Join call</button>
             </> : <>
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={toggleCamera} type="button">{cameraOn ? "Turn camera off" : "Turn camera on"}</button>
-              <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={() => changeInteractionMode(interactionMode === "voice" ? "text" : "voice")} type="button">Switch to {interactionMode === "voice" ? "text" : "voice"}</button>
-              {interactionMode === "voice" ? <button aria-label={micMuted ? "Unmute microphone" : "Mute microphone"} className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={toggleMicrophone} type="button">{micMuted ? "Unmute mic" : "Mute mic"}</button> : null}
+              <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={isSaving} onClick={() => changeInteractionMode(interactionMode === "voice" ? "text" : "voice")} type="button">Switch to {interactionMode === "voice" ? "text" : "voice"}</button>
+              {interactionMode === "voice" ? <button aria-label={micMuted ? "Unmute microphone" : "Mute microphone"} className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={isSaving} onClick={toggleMicrophone} type="button">{micMuted ? "Unmute mic" : "Mute mic"}</button> : null}
               {isSpeaking ? <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={interruptInterviewer} type="button">Interrupt & answer</button> : null}
               <button className="rounded-full bg-teal-400 px-5 py-3 text-sm font-black text-stone-950 hover:bg-teal-300 disabled:opacity-40" disabled={isSaving || isSpeaking} onClick={handleSubmitAnswer} type="button">{isSaving ? "Saving answer…" : isListening ? "Finish answer" : "Submit answer"}</button>
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:opacity-40" disabled={isSaving || Boolean(draft.trim())} onClick={handleSkipQuestion} type="button">Skip question</button>
@@ -749,7 +846,7 @@ export default function LiveInterviewPage() {
             <p className="mt-2">{microphoneTest.message}</p>
             <p className="mt-1 text-slate-400">The test releases its temporary stream when finished. During the interview, local audio is held in memory only when the on-device backup is needed.</p>
           </div> : null}
-          {callActive && interactionMode === "voice" ? <p className="mt-3 text-center text-xs text-slate-300" role="status" aria-live="polite">Microphone: {microphoneState === "starting" ? "starting speech capture" : microphoneState === "listening" ? "listening; waiting for speech" : microphoneState === "local_fallback" ? "recording locally; on-device transcription is ready at submit" : microphoneState === "transcribing" ? "transcribing on this device" : microphoneState === "speech_detected" ? "speech transcript received" : microphoneState === "permission_error" ? "permission denied" : microphoneState === "device_error" ? "input device unavailable" : microphoneState === "network_error" ? "browser speech service disconnected; preparing local fallback" : microphoneState === "no_speech" ? "no speech detected" : microphoneState === "unavailable" ? "speech recognition unavailable" : "muted"}. Typed answers remain available.</p> : null}
+          {callActive && interactionMode === "voice" ? <p className="mt-3 text-center text-xs text-slate-300" role="status" aria-live="polite">Microphone: {microphoneState === "starting" ? "starting speech capture" : microphoneState === "listening" ? "listening; waiting for speech" : microphoneState === "local_fallback" ? "recording locally; offline transcript preview is active" : microphoneState === "transcribing" ? "finalizing transcript on this device" : microphoneState === "speech_detected" ? "speech transcript received" : microphoneState === "permission_error" ? "permission denied" : microphoneState === "device_error" ? "input device unavailable" : microphoneState === "network_error" ? "browser speech service disconnected; preparing local fallback" : microphoneState === "no_speech" ? "no speech detected" : microphoneState === "unavailable" ? "speech recognition unavailable" : "muted"}. Typed answers remain available.</p> : null}
         </section>
 
         <aside className="space-y-4">
@@ -760,7 +857,7 @@ export default function LiveInterviewPage() {
             <label className="mt-3 block text-xs font-bold text-stone-500">{interactionMode === "text" ? "Type your answer" : "Edit or type your answer"}<textarea className="mt-1 min-h-20 w-full rounded-lg border border-stone-200 p-3 text-sm" onChange={(event) => { draftRef.current = event.target.value; draftWasManuallyEditedRef.current = true; setDraft(event.target.value); }} value={draft} /></label>
             {microphoneState === "unavailable" && draft.trim() && !finalTranscriptRef.current.trim() && !draftWasManuallyEditedRef.current ? <button className="mt-2 text-xs font-bold text-teal-700 underline" onClick={() => { draftWasManuallyEditedRef.current = true; setError("Partial transcript selected as text. Review it before submitting."); }} type="button">Use partial transcript as text</button> : null}
             {!speechSupported ? <p className="mt-2 text-xs text-amber-700">This browser has no live SpeechRecognition service. The app will use local Whisper transcription after you finish speaking.</p> : null}
-            <p className="mt-2 text-[11px] leading-4 text-stone-400">Voice answers are captured in memory on this device as a backup. If browser recognition disconnects, a one-time Whisper model download (about 45 MB) enables local transcription. The audio is not uploaded or saved; only the transcript is submitted. Webcam estimates run locally.</p>
+            <p className="mt-2 text-[11px] leading-4 text-stone-400">Browser speech recognition may send audio to its provider. The Whisper fallback runs locally, keeps the backup recording in memory, and does not upload or save it. If needed, it shows a preview about every 10 seconds and finalizes the full English answer when you finish. The model downloads once (about 45 MB); only the transcript is submitted to this app.</p>
           </section>
           <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <h2 className="font-bold">Answer signals</h2><p className="mt-1 text-xs text-stone-500">Updates from the live transcript; final scoring is saved after submission.</p>
