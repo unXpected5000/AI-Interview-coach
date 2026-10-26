@@ -10,11 +10,15 @@ services:
     envVars:
       - key: APP_ENV
         value: production
-      - key: BACKEND_CORS_ORIGINS
-        sync: false
       - key: MONGODB_URI
         sync: false
       - key: MONGODB_DB_NAME
         value: ai_interview_coach
       - key: JWT_SECRET_KEY
         generateValue: true
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-3.1-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false

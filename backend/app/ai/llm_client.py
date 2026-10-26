@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClientError(RuntimeError):
@@ -30,6 +33,12 @@ class LLMClient:
                 return await self._generate_gemini(prompt)
             raise LLMClientError(f"Unsupported LLM provider: {settings.llm_provider}")
         except httpx.HTTPError as exc:
+            status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            logger.warning(
+                "LLM request failed provider=%s status=%s",
+                provider,
+                status_code or "network_error",
+            )
             raise LLMClientError("The configured LLM provider request failed.") from exc
 
     async def _generate_openai(self, prompt: str) -> str:
@@ -80,11 +89,15 @@ class LLMClient:
 
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
+            f"{settings.gemini_model}:generateContent"
         )
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(
+                url,
+                headers={"x-goog-api-key": settings.gemini_api_key},
+                json=payload,
+            )
             response.raise_for_status()
             data = response.json()
 

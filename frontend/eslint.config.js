@@ -4,7 +4,7 @@ const browserGlobals = Object.fromEntries(
   [
     "alert", "Blob", "console", "document", "FormData", "localStorage", "MediaStream",
     "navigator", "performance", "requestAnimationFrame", "setTimeout", "clearTimeout",
-    "URL", "window",
+    "Request", "Response", "fetch", "URL", "window",
   ].map((name) => [name, "readonly"]),
 );
 

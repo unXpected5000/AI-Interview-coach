@@ -40,8 +40,9 @@ class ResumeService:
         self.optimizer_repository = optimizer_repository
 
     async def upload_resume(self, user_id: str, file: UploadFile) -> dict:
-        self._validate_upload(file)
-        raw_text = self._extract_text_from_pdf(await file.read())
+        file_bytes = await file.read()
+        self._validate_upload(file, file_bytes)
+        raw_text = self._extract_text_from_pdf(file_bytes)
         if not raw_text.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -166,11 +167,11 @@ Candidate keywords: {list(candidate_pool)}
         return {"resume_id": resume_id, "roles": results}
 
 
-    def _validate_upload(self, file: UploadFile) -> None:
-        if not file.filename or not is_pdf_file(file.filename, file.content_type):
+    def _validate_upload(self, file: UploadFile, file_bytes: bytes) -> None:
+        if not file.filename or not is_pdf_file(file.filename, file.content_type, file_bytes):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only PDF files are allowed.",
+                detail="Upload a valid PDF file. The file must have a .pdf name and contain a PDF header.",
             )
 
     def _extract_text_from_pdf(self, pdf_bytes: bytes) -> str:

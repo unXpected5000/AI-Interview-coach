@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     llm_provider: str = "gemini"
     openai_model: str = "gpt-4o-mini"
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
     llm_timeout_seconds: int = 60
 
     sentence_transformers_model: str = "all-MiniLM-L6-v2"
