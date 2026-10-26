@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import { getCurrentUser, loginUser, registerUser } from "../api/authApi.js";
+import { shouldClearStoredSession } from "./session.js";
 import {
   clearAccessToken,
   getAccessToken,
@@ -28,11 +29,10 @@ export function AuthProvider({ children }) {
         if (isMounted) {
           setUser(currentUser);
         }
-      } catch {
-        clearAccessToken();
-        if (isMounted) {
-          setUser(null);
-        }
+      } catch (requestError) {
+        if (!isMounted) return;
+        if (shouldClearStoredSession(requestError)) clearAccessToken();
+        setUser(null);
       } finally {
         if (isMounted) {
           setIsLoading(false);

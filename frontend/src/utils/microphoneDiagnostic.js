@@ -1,0 +1,103 @@
+export class MicrophoneDiagnosticError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "MicrophoneDiagnosticError";
+    this.code = code;
+  }
+}
+
+export function microphoneDiagnosticMessage(error) {
+  const code = error?.name ?? error?.code;
+  if (["NotAllowedError", "PermissionDeniedError", "SecurityError", "permission_denied"].includes(code)) {
+    return "Microphone access was blocked. Allow microphone access for this site in your browser settings, then try again.";
+  }
+  if (["NotFoundError", "DevicesNotFoundError", "device_missing"].includes(code)) {
+    return "No microphone was found. Connect a microphone or check that your selected input device is available.";
+  }
+  if (["NotReadableError", "TrackStartError", "device_busy"].includes(code)) {
+    return "The microphone is busy or unavailable. Close other apps using it, then try again.";
+  }
+  if (["insecure_context", "unsupported"].includes(code)) {
+    return "Microphone testing needs a supported browser on HTTPS or localhost.";
+  }
+  if (["audio_context", "NotSupportedError"].includes(code)) {
+    return "Your browser granted microphone access but cannot measure its input level. You can still try browser speech recognition.";
+  }
+  return "Microphone test failed. Check browser permissions and your input device, then try again.";
+}
+
+export function speechRecognitionErrorMessage(errorCode) {
+  const messages = {
+    "not-allowed": "Microphone access was blocked. Allow microphone access for this site in your browser settings, or type your answer.",
+    "service-not-allowed": "The browser's speech service is unavailable or blocked. Try another supported browser or type your answer.",
+    "audio-capture": "The browser could not find or open a microphone. Connect an input device or type your answer.",
+    network: "Browser speech recognition lost its network connection. Your typed answer is safe; retry when online or switch to text.",
+    "no-speech": "No speech was detected. Check the microphone and speak clearly, or type your answer.",
+    aborted: "Speech recognition stopped.",
+  };
+  return messages[errorCode] ?? `Speech recognition failed (${errorCode || "unknown error"}). Check your microphone or type your answer.`;
+}
+
+export async function testMicrophoneInput({
+  mediaDevices = globalThis.navigator?.mediaDevices,
+  AudioContextConstructor = globalThis.window?.AudioContext ?? globalThis.window?.webkitAudioContext,
+  sampleDurationMs = 1400,
+  sampleIntervalMs = 50,
+  onLevel = () => {},
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+} = {}) {
+  if (!mediaDevices?.getUserMedia) {
+    throw new MicrophoneDiagnosticError("unsupported", "Media capture is unavailable.");
+  }
+
+  let stream;
+  let context;
+  let source;
+  try {
+    stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+    const audioTracks = stream.getAudioTracks?.() ?? [];
+    if (!audioTracks.length || audioTracks.every((track) => track.readyState === "ended" || track.muted)) {
+      throw new MicrophoneDiagnosticError("device_missing", "No active microphone track was supplied.");
+    }
+    if (!AudioContextConstructor) {
+      throw new MicrophoneDiagnosticError("audio_context", "Audio level measurement is unavailable.");
+    }
+
+    context = new AudioContextConstructor();
+    if (context.state === "suspended") await context.resume();
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    source = context.createMediaStreamSource(stream);
+    source.connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+    const startedAt = now();
+    let peakLevel = 0;
+    while (now() - startedAt < sampleDurationMs) {
+      analyser.getByteTimeDomainData(samples);
+      let sumSquares = 0;
+      for (const sample of samples) {
+        const normalized = (sample - 128) / 128;
+        sumSquares += normalized * normalized;
+      }
+      const rms = Math.sqrt(sumSquares / samples.length);
+      const level = Math.max(0, Math.min(100, Math.round(rms * 400)));
+      peakLevel = Math.max(peakLevel, level);
+      onLevel(level);
+      await sleep(sampleIntervalMs);
+    }
+    onLevel(0);
+    return { peakLevel, signalDetected: peakLevel >= 3, durationMs: sampleDurationMs };
+  } catch (error) {
+    onLevel(0);
+    if (error instanceof MicrophoneDiagnosticError) throw error;
+    if (["NotAllowedError", "PermissionDeniedError", "SecurityError", "NotFoundError", "DevicesNotFoundError", "NotReadableError", "TrackStartError"].includes(error?.name)) {
+      throw error;
+    }
+    throw new MicrophoneDiagnosticError("audio_context", error?.message ?? "Microphone test failed.");
+  } finally {
+    source?.disconnect?.();
+    stream?.getTracks?.().forEach((track) => track.stop());
+    if (context && context.state !== "closed") await context.close().catch(() => {});
+  }
+}

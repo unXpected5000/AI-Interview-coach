@@ -6,6 +6,7 @@ import { useWebcam } from "../hooks/useWebcam.js";
 import { useMediaPipe } from "../hooks/useMediaPipe.js";
 import { buildSpeechAnalysis } from "../utils/speechAnalysis.js";
 import { createSpeechRecognition, getSpeechRecognitionConstructor, getSpeechRecognitionMode } from "../utils/speechRecognition.js";
+import { microphoneDiagnosticMessage, speechRecognitionErrorMessage, testMicrophoneInput } from "../utils/microphoneDiagnostic.js";
 import InterviewerAvatar from "../components/interview/InterviewerAvatar.jsx";
 import { getInterviewerState } from "../utils/interviewState.js";
 import FloatingWebcamPanel from "../components/interview/FloatingWebcamPanel.jsx";
@@ -38,7 +39,10 @@ export default function LiveInterviewPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [speechMode, setSpeechMode] = useState("");
+  const [microphoneState, setMicrophoneState] = useState("muted");
+  const [microphoneTest, setMicrophoneTest] = useState({ running: false, level: 0, message: "Run a short microphone test before joining to confirm your browser can hear input." });
   const recognitionRef = useRef(null);
+  const recognitionGenerationRef = useRef(0);
   const recognitionRetriesRef = useRef(0);
   const recognitionRetryTimerRef = useRef(null);
   const shouldListenRef = useRef(false);
@@ -78,6 +82,7 @@ export default function LiveInterviewPage() {
       active = false;
       activeQuestionIdRef.current = null;
       shouldListenRef.current = false;
+      recognitionGenerationRef.current += 1;
       recognitionRef.current?.abort?.();
       window.clearTimeout(recognitionRetryTimerRef.current);
       window.clearTimeout(interruptionTimeoutRef.current);
@@ -113,7 +118,9 @@ export default function LiveInterviewPage() {
   }, []);
 
   const listen = useCallback((reset = true) => {
+    const recognitionGeneration = ++recognitionGenerationRef.current;
     if (!speechSupported) {
+      setMicrophoneState("unavailable");
       setError("Live speech recognition is not available in this browser. You can type your answer below.");
       setIsListening(false);
       return;
@@ -129,6 +136,7 @@ export default function LiveInterviewPage() {
     }
     recognitionRetriesRef.current = 0;
     shouldListenRef.current = true;
+    setMicrophoneState("starting");
     setMicMuted(false);
     setIsListening(true);
     setError("");
@@ -138,6 +146,8 @@ export default function LiveInterviewPage() {
       if (recognitionRetriesRef.current >= 3) {
         shouldListenRef.current = false;
         setIsListening(false);
+        setMicMuted(true);
+        setMicrophoneState("unavailable");
         setError("Speech recognition stopped after several retries. Your answer is safe; switch to text or restart the microphone.");
         return;
       }
@@ -151,7 +161,8 @@ export default function LiveInterviewPage() {
     }
 
     const createAndStart = async () => {
-      if (!shouldListenRef.current) return;
+      if (!shouldListenRef.current || recognitionGeneration !== recognitionGenerationRef.current) return;
+      setMicrophoneState("starting");
       const questionId = activeQuestionIdRef.current;
       let result;
       try {
@@ -159,24 +170,30 @@ export default function LiveInterviewPage() {
       } catch {
         shouldListenRef.current = false;
         setIsListening(false);
+        setMicMuted(true);
+        setMicrophoneState("unavailable");
         setError("Could not start speech recognition. Type your answer or retry the microphone.");
         return;
       }
       const { recognition, processLocally } = result;
-      if (!shouldListenRef.current || activeQuestionIdRef.current !== questionId) return;
+      if (!shouldListenRef.current || recognitionGeneration !== recognitionGenerationRef.current || activeQuestionIdRef.current !== questionId) return;
       if (!recognition) {
         shouldListenRef.current = false;
         setIsListening(false);
+        setMicMuted(true);
+        setMicrophoneState("unavailable");
         setError("Speech recognition is unavailable. You can type your answer.");
         return;
       }
       setSpeechMode(processLocally ? "On-device speech" : "Browser speech service");
       recognition.onresult = (event) => {
-        if (activeQuestionIdRef.current !== questionId) return;
+        if (recognitionGenerationRef.current !== recognitionGeneration || activeQuestionIdRef.current !== questionId) return;
         let interim = "";
+        let receivedPhrase = false;
         for (let index = event.resultIndex; index < event.results.length; index += 1) {
           const result = event.results[index];
           const phrase = result[0]?.transcript?.trim() ?? "";
+          if (phrase) receivedPhrase = true;
           if (result.isFinal && phrase) {
             recognitionRetriesRef.current = 0;
             finalTranscriptRef.current = `${finalTranscriptRef.current} ${phrase}`.trim();
@@ -185,36 +202,58 @@ export default function LiveInterviewPage() {
             interim += `${phrase} `;
           }
         }
+        if (receivedPhrase) setMicrophoneState("speech_detected");
         updateTranscript(`${finalTranscriptRef.current} ${interim}`.trim());
       };
+      recognition.onstart = () => {
+        if (recognitionGenerationRef.current === recognitionGeneration && activeQuestionIdRef.current === questionId && shouldListenRef.current) setMicrophoneState("listening");
+      };
       recognition.onerror = (event) => {
-        if (activeQuestionIdRef.current !== questionId) return;
+        if (recognitionGenerationRef.current !== recognitionGeneration || activeQuestionIdRef.current !== questionId) return;
         if (event.error === "network" && !processLocally) {
           shouldListenRef.current = false;
           setIsListening(false);
-          setError("The browser speech service lost its network connection. Your typed answer is safe; use it or retry when online.");
-        } else if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          setMicMuted(true);
+          setMicrophoneState("network_error");
+          setError(speechRecognitionErrorMessage("network"));
+        } else if (event.error === "not-allowed" || event.error === "service-not-allowed" || event.error === "audio-capture") {
           shouldListenRef.current = false;
           setIsListening(false);
-          setError("Microphone access or browser speech recognition was blocked. You can continue by typing.");
+          setMicMuted(true);
+          setMicrophoneState(event.error === "audio-capture" ? "device_error" : "permission_error");
+          setError(speechRecognitionErrorMessage(event.error));
+        } else if (event.error === "no-speech") {
+          setMicrophoneState("no_speech");
+          setError(speechRecognitionErrorMessage(event.error));
         } else if (event.error !== "no-speech" && event.error !== "aborted") {
-          setError(`Speech recognition issue (${event.error}). Check your microphone or type your answer.`);
+          setMicrophoneState("unavailable");
+          setError(speechRecognitionErrorMessage(event.error));
         }
       };
       recognition.onend = () => {
+        if (recognitionGenerationRef.current !== recognitionGeneration) return;
         if (recognitionRef.current === recognition) recognitionRef.current = null;
-        if (shouldListenRef.current && activeQuestionIdRef.current === questionId) scheduleRecognitionRetry();
-        else setIsListening(false);
+        if (shouldListenRef.current && activeQuestionIdRef.current === questionId) {
+          setMicrophoneState("starting");
+          scheduleRecognitionRetry();
+        } else {
+          setIsListening(false);
+          if (!["network_error", "permission_error", "device_error", "unavailable"].includes(microphoneState)) {
+            setMicMuted(true);
+            setMicrophoneState("muted");
+          }
+        }
       };
       recognitionRef.current = recognition;
       try {
         recognition.start();
       } catch {
+        setMicrophoneState("starting");
         scheduleRecognitionRetry();
       }
     };
     void createAndStart();
-  }, [speechSupported, updateTranscript]);
+  }, [microphoneState, speechSupported, updateTranscript]);
 
   const speak = useCallback((text, onDone) => {
     const generation = ++speechGenerationRef.current;
@@ -226,9 +265,12 @@ export default function LiveInterviewPage() {
     shouldListenRef.current = false;
     window.clearTimeout(recognitionRetryTimerRef.current);
     recognitionRetryTimerRef.current = null;
+    recognitionGenerationRef.current += 1;
     setMicMuted(true);
     recognitionRef.current?.stop?.();
+    recognitionRef.current = null;
     setIsListening(false);
+    setMicrophoneState("muted");
     synth.cancel();
     setIsSpeaking(false);
     window.clearTimeout(speechPulseTimeoutRef.current);
@@ -289,6 +331,7 @@ export default function LiveInterviewPage() {
       return;
     }
     setCallActive(true);
+    setMicrophoneState(interactionMode === "voice" ? "starting" : "text_mode");
     if (interactionMode === "voice" && speechSupported) {
       setError("Checking for on-device speech recognition…");
       const mode = await getSpeechRecognitionMode((message) => setError(message));
@@ -305,6 +348,9 @@ export default function LiveInterviewPage() {
   function changeInteractionMode(mode) {
     if (mode === interactionMode) return;
     shouldListenRef.current = false;
+    recognitionGenerationRef.current += 1;
+    window.clearTimeout(recognitionRetryTimerRef.current);
+    recognitionRetryTimerRef.current = null;
     recognitionRef.current?.abort?.();
     recognitionRef.current = null;
     setIsListening(false);
@@ -314,6 +360,7 @@ export default function LiveInterviewPage() {
     stopSpeechAnimation();
     setIsSpeaking(false);
     setInteractionMode(mode);
+    setMicrophoneState(mode === "text" ? "text_mode" : "muted");
     if (mode === "voice" && callActive) {
       finalTranscriptRef.current = draft;
       transcriptRef.current = draft;
@@ -323,11 +370,15 @@ export default function LiveInterviewPage() {
 
   async function stopRecognitionAndWait() {
     shouldListenRef.current = false;
+    recognitionGenerationRef.current += 1;
+    window.clearTimeout(recognitionRetryTimerRef.current);
+    recognitionRetryTimerRef.current = null;
     const activeRecognition = recognitionRef.current;
     recognitionRef.current = null;
     activeRecognition?.stop?.();
     setIsListening(false);
     setMicMuted(true);
+    setMicrophoneState("muted");
     await wait(350);
     return transcriptRef.current;
   }
@@ -407,6 +458,7 @@ export default function LiveInterviewPage() {
     } finally {
       setCallActive(false);
       setIsSpeaking(false);
+      setMicrophoneState("stopped");
     }
   }
 
@@ -454,13 +506,33 @@ export default function LiveInterviewPage() {
   function toggleMicrophone() {
     if (isListening) {
       shouldListenRef.current = false;
+      recognitionGenerationRef.current += 1;
+      window.clearTimeout(recognitionRetryTimerRef.current);
+      recognitionRetryTimerRef.current = null;
       recognitionRef.current?.stop?.();
       recognitionRef.current = null;
       setIsListening(false);
       setMicMuted(true);
+      setMicrophoneState("muted");
       return;
     }
     if (interactionMode === "voice" && callActive && !isSpeaking) listen(false);
+  }
+
+  async function handleMicrophoneTest() {
+    setMicrophoneTest({ running: true, level: 0, message: "Allow access if your browser asks, then speak for a moment." });
+    try {
+      const result = await testMicrophoneInput({ onLevel: (level) => setMicrophoneTest((current) => ({ ...current, level })) });
+      setMicrophoneTest({
+        running: false,
+        level: 0,
+        message: result.signalDetected
+          ? `Microphone input detected (peak level ${result.peakLevel}%). The temporary test stream has been released.`
+          : "Permission worked, but the test heard no clear input. Check the selected mic, hardware mute, and input volume, then test again.",
+      });
+    } catch (testError) {
+      setMicrophoneTest({ running: false, level: 0, message: microphoneDiagnosticMessage(testError) });
+    }
   }
 
   function interruptInterviewer() {
@@ -503,7 +575,7 @@ export default function LiveInterviewPage() {
       <div className="grid gap-5 xl:grid-cols-[1.5fr_0.75fr]">
         <section className="overflow-hidden rounded-2xl bg-[#151719] p-4 text-white shadow-xl sm:p-6">
           <div className="relative min-h-[460px] overflow-hidden rounded-xl bg-gradient-to-br from-slate-800 via-slate-900 to-teal-950">
-            <div className="absolute left-4 top-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white backdrop-blur"><span className={`size-2 rounded-full ${callActive ? "bg-emerald-400" : "bg-stone-400"}`} />{callActive ? "Connected" : "Ready to join"}</div>
+            <div className="absolute left-4 top-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white backdrop-blur"><span className={`size-2 rounded-full ${callActive ? isListening ? "bg-emerald-400" : "bg-amber-300" : "bg-stone-400"}`} />{callActive ? isSpeaking ? "Interviewer speaking" : isListening ? microphoneState === "speech_detected" ? "Speech detected" : "Listening for speech" : "Interview active" : "Ready to join"}</div>
             <div className={`interviewer-stage-avatar${cameraOn ? " interviewer-stage-avatar--camera" : ""}`}><InterviewerAvatar state={avatarState} speechActivity={speechActivity} hasSpeechBoundaryEvents={hasSpeechBoundaryEvents} /></div>
             {callActive && cameraOn ? <FloatingWebcamPanel videoRef={videoRef} cameraError={cameraError} onClose={toggleCamera} /> : null}
             {callActive && cameraOn && cameraAnalysisError && !cameraError ? <div className="absolute bottom-28 left-4 z-20 max-w-[45%] rounded-lg bg-amber-200 px-3 py-2 text-xs font-semibold text-amber-950">{cameraAnalysisError}</div> : null}
@@ -516,7 +588,8 @@ export default function LiveInterviewPage() {
                 <button aria-pressed={interactionMode === "voice"} className={`rounded-full px-4 py-2 text-sm font-bold ${interactionMode === "voice" ? "bg-teal-400 text-stone-950" : "text-white"}`} onClick={() => changeInteractionMode("voice")} type="button">Voice</button>
                 <button aria-pressed={interactionMode === "text"} className={`rounded-full px-4 py-2 text-sm font-bold ${interactionMode === "text" ? "bg-teal-400 text-stone-950" : "text-white"}`} onClick={() => changeInteractionMode("text")} type="button">Text</button>
               </div>
-              <button className="rounded-full bg-emerald-400 px-6 py-3 text-sm font-black text-stone-950 hover:bg-emerald-300" onClick={handleJoinCall} type="button">Join call</button>
+              {interactionMode === "voice" ? <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running} onClick={handleMicrophoneTest} type="button">{microphoneTest.running ? "Testing microphone…" : "Test microphone"}</button> : null}
+              <button className="rounded-full bg-emerald-400 px-6 py-3 text-sm font-black text-stone-950 hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running} onClick={handleJoinCall} type="button">Join call</button>
             </> : <>
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={toggleCamera} type="button">{cameraOn ? "Turn camera off" : "Turn camera on"}</button>
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={() => changeInteractionMode(interactionMode === "voice" ? "text" : "voice")} type="button">Switch to {interactionMode === "voice" ? "text" : "voice"}</button>
@@ -527,6 +600,13 @@ export default function LiveInterviewPage() {
               <button className="rounded-full bg-rose-600 px-5 py-3 text-sm font-black text-white hover:bg-rose-500 disabled:opacity-50" disabled={isSaving} onClick={handleEndCall} type="button">End call & report</button>
             </>}
           </div>
+          {interactionMode === "voice" && !callActive ? <div className="mt-3 rounded-xl border border-white/15 bg-black/20 p-3 text-xs text-slate-200" role="status" aria-live="polite">
+            <div className="mb-1 flex items-center justify-between gap-3"><span className="font-bold">Microphone input level</span><span>{microphoneTest.running ? `${microphoneTest.level}%` : "Test mode"}</span></div>
+            <div className="h-2 overflow-hidden rounded-full bg-white/15" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow={microphoneTest.level}><div className="h-full rounded-full bg-teal-300 transition-[width] duration-75" style={{ width: `${microphoneTest.level}%` }} /></div>
+            <p className="mt-2">{microphoneTest.message}</p>
+            <p className="mt-1 text-slate-400">The test releases its temporary stream before browser speech recognition starts. During an interview, this browser API confirms input when transcript text arrives but does not expose a continuous level meter.</p>
+          </div> : null}
+          {callActive && interactionMode === "voice" ? <p className="mt-3 text-center text-xs text-slate-300" role="status" aria-live="polite">Microphone: {microphoneState === "starting" ? "starting browser recognition" : microphoneState === "listening" ? "listening; waiting for speech" : microphoneState === "speech_detected" ? "speech received by browser recognition" : microphoneState === "permission_error" ? "permission denied" : microphoneState === "device_error" ? "input device unavailable" : microphoneState === "network_error" ? "speech service network error" : microphoneState === "no_speech" ? "no speech detected" : microphoneState === "unavailable" ? "speech recognition unavailable" : "muted"}. Typed answers remain available.</p> : null}
         </section>
 
         <aside className="space-y-4">
