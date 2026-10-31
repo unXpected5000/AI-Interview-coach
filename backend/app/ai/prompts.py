@@ -10,7 +10,7 @@ Return strict JSON only with this shape:
       "topic_focus": "State management in project X",
       "source_section": "projects|skills|internships|experience|education|certifications|tools",
       "question_type": "conceptual|practical|scenario|behavioral",
-      "difficulty": "easy|medium|hard",
+      "difficulty": "low|medium|hard|interview_ready",
       "question": "string",
       "expected_answer": "string",
       "expected_points": ["string", "string"]
@@ -22,7 +22,7 @@ Rules:
 - Generate exactly 10 questions.
 - Adopt a conversational, recruiter persona. Avoid dry, robotic phrasing.
 - If role and experience context are provided, tailor the questions to that level and position.
-- Progress naturally from easier warm-ups to more difficult deep dives. Use 4 easy, 4 medium, 2 hard questions.
+- Respect the requested difficulty and mode in interview_context. LOW asks fundamentals; MEDIUM asks application and reasoning; HARD asks edge cases, optimization and trade-offs. In INTERVIEW_READY mode, mix realistic role-level questions and adapt to the stored question plan.
 - Strongly prefer behavioral and STAR (Situation, Task, Action, Result) method questions over generic ones like 'tell me about yourself'.
 - Use the resume context deeply, especially projects, experience, technologies, and skills.
 - Every question must have a unique topic_focus.

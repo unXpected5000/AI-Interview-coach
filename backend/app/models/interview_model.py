@@ -11,12 +11,20 @@ def build_interview_document(
     resume_id: str,
     skills: list[str],
     questions: list[dict[str, Any]],
+    initial_difficulty: str = "medium",
+    difficulty_mode: str = "adaptive",
 ) -> dict[str, Any]:
     return {
         "user_id": user_id,
         "resume_id": resume_id,
         "skills": skills,
         "questions": questions,
+        "difficulty": {
+            "initial": initial_difficulty,
+            "current": "medium" if initial_difficulty == "interview_ready" and difficulty_mode == "adaptive" else initial_difficulty,
+            "mode": difficulty_mode,
+            "history": [],
+        },
         "status": "active",
         "created_at": datetime.now(timezone.utc),
         "completed_at": None,
@@ -48,6 +56,7 @@ def serialize_interview(document: dict[str, Any]) -> dict[str, Any]:
         "status": document.get("status", "active"),
         "created_at": document.get("created_at"),
         "completed_at": document.get("completed_at"),
+        "difficulty": document.get("difficulty", {"initial": "medium", "current": "medium", "mode": "adaptive", "history": []}),
     }
 
 
@@ -65,6 +74,7 @@ def serialize_interview_summary(document: dict[str, Any], score: dict[str, Any] 
         "question_scores": score.get("question_scores", []) if score else [],
         "strengths": score.get("strengths", []) if score else [],
         "weaknesses": score.get("weaknesses", []) if score else [],
+        "difficulty": document.get("difficulty", {"initial": "medium", "current": "medium", "mode": "adaptive", "history": []}),
     }
     if score:
         summary.update(build_assessment_summary(score.get("overall_score", 0), score.get("question_scores", [])))

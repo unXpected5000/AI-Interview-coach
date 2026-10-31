@@ -14,6 +14,7 @@ from app.services.feedback_service import FeedbackService
 from app.services.question_service import QuestionService
 from app.services.speech_service import SpeechService
 from app.services.report_service import ReportService
+from app.services.difficulty_service import next_difficulty, valid_evaluation_scores
 
 
 class InterviewService:
@@ -39,7 +40,7 @@ class InterviewService:
         self.speech_service = speech_service
         self.report_service = report_service
 
-    async def start_interview(self, user_id: str, resume_id: str) -> dict:
+    async def start_interview(self, user_id: str, resume_id: str, difficulty: str = "medium", difficulty_mode: str = "adaptive") -> dict:
         try:
             resume = await self.resume_repository.get_by_id_and_user(resume_id, user_id)
         except ValueError as exc:
@@ -57,13 +58,17 @@ class InterviewService:
         if existing is not None:
             return serialize_interview(existing)
 
-        questions = await self.question_service.generate_questions(resume)
+        if difficulty not in {"low", "medium", "hard", "interview_ready"}:
+            raise HTTPException(status_code=422, detail="Choose low, medium, hard, or interview_ready difficulty.")
+        questions = await self.question_service.generate_questions(resume, {"difficulty": difficulty, "difficulty_mode": difficulty_mode})
         skills = resume.get("extracted_skills", [])
         document = await self.interview_repository.create(
             user_id=user_id,
             resume_id=resume_id,
             skills=skills,
             questions=questions,
+            initial_difficulty=difficulty,
+            difficulty_mode=difficulty_mode,
         )
         return serialize_interview(document)
 
@@ -124,6 +129,22 @@ class InterviewService:
             score = await self.score_repository.update_report_and_webcam_summary(
                 interview_id, user_id, report, webcam_summary
             ) or score
+        if score is not None:
+            expected_readiness = serialize_score(score).get("readiness_category")
+            saved_performance = str((score.get("report") or {}).get("Performance", ""))
+            if expected_readiness and expected_readiness not in saved_performance:
+                # Keep persisted report text, JSON downloads and the canonical
+                # score label synchronized after rubric/classifier changes.
+                webcam_summary = self._summarize_webcam(answers)
+                refreshed_report = self.report_service.generate_report(
+                    interview_data=interview,
+                    answers_data=answers,
+                    score_data=score,
+                    webcam_summary=webcam_summary,
+                )
+                score = await self.score_repository.update_report_and_webcam_summary(
+                    interview_id, user_id, refreshed_report, webcam_summary
+                ) or {**score, "report": refreshed_report, "webcam_summary": webcam_summary}
         return {
             "interview": serialize_interview(interview),
             "answers": [serialize_answer(answer) for answer in answers],
@@ -140,6 +161,17 @@ class InterviewService:
                 score = refreshed.get("score")
             summaries.append(serialize_interview_summary(document, score))
         return summaries
+
+    async def delete_interview(self, interview_id: str, user_id: str) -> None:
+        try:
+            interview = await self.interview_repository.get_by_id_and_user(interview_id, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid interview id.") from exc
+        if interview is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview not found.")
+        await self.answer_repository.delete_by_interview_ids_and_user([interview_id], user_id)
+        await self.score_repository.delete_by_interview_ids_and_user([interview_id], user_id)
+        await self.interview_repository.delete_by_id_and_user(interview_id, user_id)
 
     async def submit_answer(
         self,
@@ -229,7 +261,7 @@ class InterviewService:
             webcam_metrics=self._normalize_webcam_metrics(webcam_metrics),
             answer_status=answer_status,
         )
-        score = float(score_payload.get("score", 0))
+        score = float(score_payload.get("score") or 0)
         saved_questions = list(interview.get("questions", []))
         adapted_question = None
         current_index = next(
@@ -245,8 +277,20 @@ class InterviewService:
             ),
             None,
         )
-        if next_question is not None:
-            adapted_question = await self.question_service.adapt_question(next_question, answer_text, score)
+        difficulty_state = interview.get("difficulty") or {"initial": "medium", "current": "medium", "mode": "adaptive", "history": []}
+        reason = None
+        target_difficulty = difficulty_state.get("current", "medium")
+        if answer_status in {"answered", "partial", "interrupted"} and score_payload.get("score") is not None:
+            target_difficulty, reason = next_difficulty(
+                difficulty_state.get("current", "medium"),
+                difficulty_state.get("mode", "adaptive"),
+                valid_evaluation_scores(saved_answers),
+            )
+            if reason:
+                difficulty_state = {**difficulty_state, "current": target_difficulty, "history": [*difficulty_state.get("history", []), {"from": difficulty_state.get("current", "medium"), "to": target_difficulty, "reason": reason, "trigger_question_id": question_id}]}
+                await self.interview_repository.update_difficulty(interview_id, user_id, difficulty_state)
+        if next_question is not None and reason and difficulty_state.get("mode") == "adaptive" and answer_status in {"answered", "partial", "interrupted"} and score_payload.get("score") is not None:
+            adapted_question = await self.question_service.adapt_question(next_question, answer_text, score, target_difficulty=difficulty_state.get("current", "medium"))
             await self.interview_repository.update_question(interview_id, user_id, adapted_question)
 
         existing_follow_up = next(
@@ -255,11 +299,12 @@ class InterviewService:
         )
         follow_up_count = sum(1 for item in saved_questions if item.get("follow_up_for") is not None)
         follow_up_question = existing_follow_up
-        should_follow_up = score < 50 or score >= 80
+        should_follow_up = answer_status in {"answered", "partial", "interrupted"} and score_payload.get("score") is not None and (score < 50 or score >= 80)
         if follow_up_question is None and should_follow_up and follow_up_count < 3:
             next_question_id = max((int(item.get("question_id", 0)) for item in saved_questions), default=0) + 1
             candidate = await self.question_service.generate_follow_up(
-                question, answer_text, score_payload, next_question_id
+                question, answer_text, score_payload, next_question_id,
+                target_difficulty=(question.get("difficulty", difficulty_state.get("current", "medium")) if difficulty_state.get("initial") == "interview_ready" else difficulty_state.get("current", "medium")) if difficulty_state.get("mode") == "fixed" else None,
             )
             follow_up_question = await self.interview_repository.add_follow_up_question(
                 interview_id, user_id, question_id, candidate
@@ -267,9 +312,11 @@ class InterviewService:
 
         response = serialize_answer(document)
         if answer_status in {"skipped", "evaluation_failed"}:
+            response["difficulty_state"] = difficulty_state
             return response
         response["follow_up_question"] = follow_up_question
         response["adapted_question"] = adapted_question
+        response["difficulty_state"] = difficulty_state
         return response
 
     async def complete_interview(self, interview_id: str, user_id: str) -> dict:

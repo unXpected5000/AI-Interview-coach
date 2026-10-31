@@ -24,14 +24,14 @@ html {
 }
 
 html[data-theme="dark"] {
-  --app-background: #000000;
-  --panel-background: #111111;
-  --panel-muted: #1a1a1a;
-  --text-primary: #f3f4f6;
-  --text-secondary: #cccccc;
-  --text-muted: #999999;
-  --border-color: #444444;
-  --score-track: #333333;
+  --app-background: #171b20;
+  --panel-background: #20262d;
+  --panel-muted: #29313a;
+  --text-primary: #f1f5f9;
+  --text-secondary: #c2cbd4;
+  --text-muted: #aab4bf;
+  --border-color: #46515d;
+  --score-track: #39434e;
   color-scheme: dark;
   background: var(--app-background);
 }
@@ -59,11 +59,11 @@ html[data-theme="dark"] [class~="bg-stone-100"] {
 }
 
 html[data-theme="dark"] [class~="bg-stone-200"] {
-  background-color: #292929 !important;
+  background-color: #343e49 !important;
 }
 
 html[data-theme="dark"] [class~="bg-stone-300"] {
-  background-color: #404040 !important;
+  background-color: #414c58 !important;
 }
 
 html[data-theme="dark"] [class~="bg-stone-950"] { background-color: var(--app-background) !important; }
@@ -125,6 +125,9 @@ html[data-theme="dark"] [class~="text-stone-400"] {
   color: var(--text-muted) !important;
 }
 
+html[data-theme="dark"] [class~="text-stone-300"],
+html[data-theme="dark"] [class~="text-gray-500"] { color: var(--text-muted) !important; }
+
 html[data-theme="dark"] [class~="text-gray-950"],
 html[data-theme="dark"] [class~="text-gray-700"] { color: #eee !important; }
 html[data-theme="dark"] [class~="text-gray-600"] { color: #ccc !important; }
@@ -143,6 +146,16 @@ html[data-theme="dark"] textarea,
 html[data-theme="dark"] select {
   color-scheme: dark;
 }
+
+html[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+  background-color: var(--panel-muted);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+:focus-visible { outline: 3px solid #0f766e; outline-offset: 2px; }
 
 /* Resume preview and print output remain faithful to the selected resume template. */
 html[data-theme="dark"] .resume-print,

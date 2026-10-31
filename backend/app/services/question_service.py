@@ -10,7 +10,7 @@ from app.utils.mongo import make_json_safe
 
 
 QUESTION_TYPES = ("conceptual", "practical", "scenario")
-QUESTION_DIFFICULTIES = {"easy", "medium", "hard"}
+QUESTION_DIFFICULTIES = {"low", "medium", "hard", "interview_ready", "easy"}
 QUESTION_TYPE_SEQUENCE = [
     "conceptual",
     "practical",
@@ -36,7 +36,7 @@ class QuestionService:
             + list(structured_resume.get("skills", []))
             + list(structured_resume.get("tools", []))
         )
-        topic_plan = self._build_topic_plan(structured_resume, skills)
+        topic_plan = self._build_topic_plan(structured_resume, skills, (interview_context or {}).get("difficulty", "medium"))
         prompt = self._build_prompt(structured_resume, skills, topic_plan, interview_context)
 
         try:
@@ -65,9 +65,11 @@ class QuestionService:
         question: dict[str, Any],
         answer_text: str,
         score: float,
+        target_difficulty: str | None = None,
     ) -> dict[str, Any]:
         """Rewrite the next question at a level selected from the last answer."""
-        difficulty = self.difficulty_for_score(score)
+        requested_difficulty = target_difficulty or self.difficulty_for_score(score)
+        difficulty = "easy" if requested_difficulty == "low" else requested_difficulty
         prompt = (
             "Rewrite the next interview question for the requested difficulty, using the candidate's prior answer "
             "to choose a useful level of challenge. Return one strict JSON object with keys question, expected_answer, "
@@ -97,7 +99,7 @@ class QuestionService:
         adapted = dict(question)
         adapted.update(
             {
-                "difficulty": difficulty,
+                "difficulty": requested_difficulty,
                 "question": text,
                 "expected_answer": expected,
                 "expected_points": points,
@@ -112,9 +114,11 @@ class QuestionService:
         answer_text: str,
         evaluation: dict[str, Any],
         question_id: int,
+        target_difficulty: str | None = None,
     ) -> dict[str, Any]:
         score = float(evaluation.get("score", 0))
-        difficulty = "easy" if score < 50 else "hard"
+        requested_difficulty = target_difficulty or ("easy" if score < 50 else "hard")
+        difficulty = "easy" if requested_difficulty == "low" else requested_difficulty
         prompt = (
             "Create one concise, specific follow-up interview question based on the prior question and answer. "
             "For an easy follow-up, clarify a missing fundamental. For a hard follow-up, probe a trade-off, edge case, "
@@ -146,7 +150,7 @@ class QuestionService:
         return {
             "question_id": question_id,
             "skill": question.get("skill", "General"),
-            "difficulty": difficulty,
+            "difficulty": requested_difficulty,
             "question_type": "scenario" if difficulty == "hard" else "conceptual",
             "topic_focus": question.get("topic_focus", question.get("skill", "General")),
             "source_section": question.get("source_section", "skills"),
@@ -209,7 +213,7 @@ class QuestionService:
         }
         return f"{QUESTION_GENERATION_PROMPT}\n\nResume context:\n{json.dumps(make_json_safe(payload), indent=2)}"
 
-    def _build_topic_plan(self, structured_resume: dict[str, Any], skills: list[str]) -> list[dict[str, Any]]:
+    def _build_topic_plan(self, structured_resume: dict[str, Any], skills: list[str], difficulty: str = "medium") -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
 
         for project in structured_resume.get("projects", []):
@@ -318,13 +322,15 @@ class QuestionService:
         plan: list[dict[str, Any]] = []
         used_topics: set[str] = set()
         for index in range(10):
-            difficulty = "medium"
+            question_difficulty = difficulty if difficulty in QUESTION_DIFFICULTIES else "medium"
+            if question_difficulty == "interview_ready":
+                question_difficulty = ("medium", "medium", "medium", "low", "medium", "hard", "medium", "low", "hard", "medium")[index]
             candidate = self._next_candidate(candidates, used_topics, index)
             question_type = QUESTION_TYPE_SEQUENCE[index]
             plan.append(
                 {
                     "question_id": index + 1,
-                    "difficulty": difficulty,
+                    "difficulty": question_difficulty,
                     "question_type": question_type,
                     "topic_focus": candidate["topic_focus"],
                     "source_section": candidate["source_section"],

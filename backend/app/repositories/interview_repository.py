@@ -17,12 +17,16 @@ class InterviewRepository:
         resume_id: str,
         skills: list[str],
         questions: list[dict[str, Any]],
+        initial_difficulty: str = "medium",
+        difficulty_mode: str = "adaptive",
     ) -> dict[str, Any]:
         document = build_interview_document(
             user_id=user_id,
             resume_id=resume_id,
             skills=skills,
             questions=questions,
+            initial_difficulty=initial_difficulty,
+            difficulty_mode=difficulty_mode,
         )
         result = await self.collection.insert_one(document)
         return await self.collection.find_one({"_id": result.inserted_id})
@@ -45,6 +49,12 @@ class InterviewRepository:
             },
             {"$set": {"questions.$[item]": question}},
             array_filters=[{"item.question_id": question["question_id"]}],
+        )
+
+    async def update_difficulty(self, interview_id: str, user_id: str, difficulty: dict[str, Any]) -> None:
+        await self.collection.update_one(
+            {"_id": to_object_id(interview_id), "user_id": user_id},
+            {"$set": {"difficulty": difficulty}},
         )
 
     async def add_follow_up_question(
@@ -85,6 +95,10 @@ class InterviewRepository:
 
     async def delete_by_resume_and_user(self, resume_id: str, user_id: str) -> None:
         await self.collection.delete_many({"resume_id": resume_id, "user_id": user_id})
+
+    async def delete_by_id_and_user(self, interview_id: str, user_id: str) -> bool:
+        result = await self.collection.delete_one({"_id": to_object_id(interview_id), "user_id": user_id})
+        return result.deleted_count == 1
 
     async def list_by_user(self, user_id: str) -> list[dict[str, Any]]:
         cursor = self.collection.find({"user_id": user_id}).sort("created_at", -1)

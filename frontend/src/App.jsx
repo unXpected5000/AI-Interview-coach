@@ -14,11 +14,15 @@ import ResumeOptimizerPage from "./pages/ResumeOptimizerPage.jsx";
 import ResumeUploadPage from "./pages/ResumeUploadPage.jsx";
 import ResumeBuilderPage from "./pages/ResumeBuilderPage.jsx";
 import LiveInterviewPage from "./pages/LiveInterviewPage.jsx";
+import AccountPage from "./pages/AccountPage.jsx";
+import LegalPage from "./pages/LegalPage.jsx";
+import CookieConsent from "./components/ui/CookieConsent.jsx";
 
 export default function App() {
   return (
-    <Routes>
+    <><CookieConsent /><Routes>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/legal/:kind" element={<LegalPage />} />
 
       <Route element={<PublicOnlyRoute />}>
         <Route element={<PublicLayout />}>
@@ -30,6 +34,7 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/account" element={<AccountPage />} />
           <Route path="/resumes/upload" element={<ResumeUploadPage />} />
           <Route path="/resume-builder" element={<ResumeBuilderPage />} />
           <Route path="/interviews/start" element={<InterviewStartPage />} />
@@ -42,6 +47,6 @@ export default function App() {
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
-    </Routes>
+    </Routes></>
   );
 }

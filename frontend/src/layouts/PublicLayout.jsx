@@ -1,4 +1,4 @@
-import { Outlet } from "react-router-dom";
+import { Link, Outlet } from "react-router-dom";
 import ThemeToggle from "../components/ui/ThemeToggle.jsx";
 
 export default function PublicLayout() {
@@ -9,6 +9,9 @@ export default function PublicLayout() {
       </div>
       <div className="mx-auto max-w-md">
         <Outlet />
+        <footer className="mt-8 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-stone-600">
+          <Link className="underline" to="/legal/privacy">Privacy</Link><Link className="underline" to="/legal/terms">Terms</Link><Link className="underline" to="/legal/refund">Refunds</Link><Link className="underline" to="/legal/cookies">Cookies</Link>
+        </footer>
       </div>
     </main>
   );

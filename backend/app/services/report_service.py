@@ -52,7 +52,7 @@ class ReportService:
         if not question_scores:
             answer_ids = {answer.get("question_id") for answer in answers_data if isinstance(answer, dict) and str(answer.get("answer_text") or "").strip()}
             question_scores = [
-                {"answer_status": "answered" if question.get("question_id") in answer_ids else "unanswered"}
+                {"answer_status": "answered" if question.get("question_id") in answer_ids else "unanswered", "difficulty": question.get("difficulty", "unknown")}
                 for question in questions if isinstance(question, dict)
             ]
         assessment = build_assessment_summary(overall_score, question_scores)
@@ -63,6 +63,7 @@ class ReportService:
             "Performance": f"{overall_score:.1f}/100 — {assessment['readiness_category']}",
             "Completion": f"{answered_questions} of {total_questions} questions answered ({assessment['completion_percentage']:.1f}%). {assessment['assessment_reliability']}: {assessment['assessment_note']}",
             "Scoring Rubric": assessment["scoring_rubric"],
+            "Interview Difficulty Analysis": self._difficulty_summary(interview_data, question_scores),
             "Executive Summary": (
                 f"Practice performance: {overall_score:.1f}/100. Readiness category: {assessment['readiness_category']}. "
                 + (f"{unanswered_questions} question(s) were unanswered. " if unanswered_questions else "")
@@ -78,6 +79,48 @@ class ReportService:
             "Strengths": strengths,
             "Weaknesses": weaknesses,
             "Recommendations": recommendations,
+        }
+
+    def _difficulty_summary(self, interview_data: dict, question_scores: list[dict]) -> dict:
+        state = interview_data.get("difficulty") or {"initial": "medium", "current": "medium", "mode": "adaptive", "history": []}
+        grouped: dict[str, list[float]] = {}
+        counts: dict[str, dict[str, int]] = {}
+        for row in question_scores:
+            level = str(row.get("difficulty") or "unknown")
+            counts.setdefault(level, {"answered": 0, "partial": 0, "interrupted": 0, "skipped": 0, "unanswered": 0, "evaluation_failed": 0})
+            status = row.get("answer_status", "unanswered")
+            if status in counts[level]: counts[level][status] += 1
+            if status in {"answered", "partial", "interrupted"} and row.get("score") is not None:
+                try: grouped.setdefault(level, []).append(float(row["score"]))
+                except (TypeError, ValueError): pass
+        current = state.get("current", "medium")
+        current_average = (sum(grouped[current]) / len(grouped[current])) if grouped.get(current) else None
+        recommended = current
+        if current_average is not None and current_average >= 80:
+            recommended = {"low": "medium", "medium": "hard", "hard": "hard"}.get(current, current)
+        averages = {level: (sum(values) / len(values)) for level, values in grouped.items() if values}
+        difficulty_rank = {"low": 1, "easy": 1, "medium": 2, "hard": 3}
+        attempted_levels = [level for level, counts_for_level in counts.items() if any(counts_for_level[key] for key in ("answered", "partial", "interrupted"))]
+        highest_attempted = max(attempted_levels, key=lambda level: difficulty_rank.get(level, 0), default=None)
+        strongest = max(averages, key=averages.get, default=None)
+        lowest_observed = min(averages, key=averages.get, default=None)
+        all_scores = [score for values in grouped.values() for score in values]
+        consistency = None
+        if len(all_scores) > 1:
+            mean_score = sum(all_scores) / len(all_scores)
+            consistency = round(math.sqrt(sum((score - mean_score) ** 2 for score in all_scores) / len(all_scores)), 1)
+        return {
+            "initial_difficulty": state.get("initial", "medium"),
+            "mode": state.get("mode", "adaptive"),
+            "final_difficulty": state.get("current", "medium"),
+            "progression": state.get("history", []),
+            "by_difficulty": {level: {"average_score": round(sum(grouped[level]) / len(grouped[level]), 1) if grouped.get(level) else None, "evaluated": len(grouped.get(level, [])), **counts[level]} for level in counts},
+            "recommended_practice_difficulty": recommended,
+            "highest_attempted_difficulty": highest_attempted,
+            "strongest_observed_difficulty": strongest,
+            "lowest_average_observed_difficulty": lowest_observed,
+            "score_standard_deviation": consistency,
+            "note": "Difficulty and answer scores are practice signals, not a validated hiring prediction.",
         }
 
     def _safe_number(self, value) -> float:

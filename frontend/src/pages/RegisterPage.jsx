@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import GoogleSignInButton from "../components/auth/GoogleSignInButton.jsx";
+import { recordConsent } from "../api/accountApi.js";
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -10,6 +11,7 @@ export default function RegisterPage() {
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   function updateField(event) {
     setForm((current) => ({
@@ -25,6 +27,7 @@ export default function RegisterPage() {
 
     try {
       await register(form);
+      await recordConsent("terms_acknowledgement", "accepted").catch(() => {});
       navigate("/dashboard", { replace: true });
     } catch (requestError) {
       setError(
@@ -40,6 +43,7 @@ export default function RegisterPage() {
     setIsSubmitting(true);
     try {
       await loginWithGoogle(credential);
+      await recordConsent("terms_acknowledgement", "accepted").catch(() => {});
       navigate("/dashboard", { replace: true });
     } catch (requestError) {
       setError(requestError.response?.data?.detail ?? "Google sign-in failed. Please try again.");
@@ -65,6 +69,8 @@ export default function RegisterPage() {
             onChange={updateField}
           />
         </label>
+
+        <label className="flex items-start gap-2 text-xs leading-5 text-gray-700"><input checked={termsAccepted} className="mt-1" onChange={(event) => setTermsAccepted(event.target.checked)} type="checkbox" /><span>I agree to the <Link className="underline" to="/legal/terms">Terms of Service</Link> and acknowledge the <Link className="underline" to="/legal/privacy">Privacy Policy</Link>. No marketing consent is requested.</span></label>
 
         <label className="block">
           <span className="text-sm font-medium text-gray-700">Email</span>
@@ -97,7 +103,7 @@ export default function RegisterPage() {
 
         <button
           className="w-full rounded-md bg-gray-950 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-gray-400"
-          disabled={isSubmitting}
+          disabled={isSubmitting || !termsAccepted}
           type="submit"
         >
           {isSubmitting ? "Creating account..." : "Create account"}
@@ -105,7 +111,7 @@ export default function RegisterPage() {
       </form>
 
       <div className="my-5 flex items-center gap-3 text-xs text-gray-500"><span className="h-px flex-1 bg-gray-200" />or continue with<span className="h-px flex-1 bg-gray-200" /></div>
-      <GoogleSignInButton disabled={isSubmitting} onCredential={handleGoogleCredential} />
+      <GoogleSignInButton disabled={isSubmitting || !termsAccepted} onCredential={handleGoogleCredential} />
 
       <p className="mt-4 text-sm text-gray-600">
         Already have an account?{" "}

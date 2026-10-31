@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { getInterview } from "../api/interviewApi.js";
+import { deleteInterview, getInterview } from "../api/interviewApi.js";
 import DonutScore from "../components/ui/DonutScore.jsx";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
@@ -10,9 +10,18 @@ import ExportButtons from "../components/interview/ExportButtons.jsx";
 
 export default function ResultsPage() {
   const { interviewId } = useParams();
+  const navigate = useNavigate();
   const [interviewState, setInterviewState] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  async function removeInterview() {
+    if (!window.confirm("Permanently delete this interview, its answers, scores and report? This cannot be undone.")) return;
+    setIsDeleting(true); setError("");
+    try { await deleteInterview(interviewId); navigate("/dashboard", { replace: true }); }
+    catch (requestError) { setError(requestError.response?.data?.detail ?? "Unable to delete this interview."); setIsDeleting(false); }
+  }
 
   useEffect(() => {
     let active = true;
@@ -132,7 +141,7 @@ export default function ResultsPage() {
             <section className="flex flex-col space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
                 <h2 className="text-xl font-bold text-stone-950">Final Report</h2>
-                <ExportButtons interviewId={interviewId} />
+                <div className="flex flex-wrap gap-2"><ExportButtons interviewId={interviewId} /><button aria-label="Delete this interview and report" className="rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-800 focus-visible:outline" disabled={isDeleting} onClick={removeInterview} type="button">{isDeleting ? "Deleting…" : "Delete report"}</button></div>
               </div>
 
               {score.webcam_summary?.answers_with_metrics > 0 ? (

@@ -27,10 +27,13 @@ class InterviewResponse(BaseModel):
     status: str
     created_at: datetime
     completed_at: datetime | None = None
+    difficulty: dict = Field(default_factory=lambda: {"initial": "medium", "current": "medium", "mode": "adaptive", "history": []})
 
 
 class InterviewStartRequest(BaseModel):
     resume_id: str
+    difficulty: Literal["low", "medium", "hard", "interview_ready"] = "medium"
+    difficulty_mode: Literal["fixed", "adaptive"] = "adaptive"
 
 
 class InterviewStartResponse(BaseModel):
@@ -117,6 +120,7 @@ class InterviewSummary(BaseModel):
     answered_questions: int = 0
     completion_percentage: float = 0
     assessment_reliability: str | None = None
+    difficulty: dict = Field(default_factory=dict)
 
 
 class InterviewListResponse(BaseModel):

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps import get_current_user, get_interview_service
 from app.schemas.interview_schema import (
@@ -17,13 +17,23 @@ from app.services.interview_service import InterviewService
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 
 
+@router.delete("/{interview_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_interview(
+    interview_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    interview_service: Annotated[InterviewService, Depends(get_interview_service)],
+) -> Response:
+    await interview_service.delete_interview(interview_id, current_user["id"])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/start", response_model=InterviewStartResponse, status_code=status.HTTP_201_CREATED)
 async def start_interview(
     payload: InterviewStartRequest,
     current_user: Annotated[dict, Depends(get_current_user)],
     interview_service: Annotated[InterviewService, Depends(get_interview_service)],
 ) -> dict:
-    interview = await interview_service.start_interview(current_user["id"], payload.resume_id)
+    interview = await interview_service.start_interview(current_user["id"], payload.resume_id, payload.difficulty, payload.difficulty_mode)
     return {"interview": interview}
 
 

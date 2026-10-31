@@ -387,6 +387,7 @@ export default function InterviewPage() {
         ...current,
         [currentQuestion.question_id]: savedAnswer,
       }));
+      if (savedAnswer.difficulty_state) setInterviewState((current) => current ? { ...current, interview: { ...current.interview, difficulty: savedAnswer.difficulty_state } } : current);
 
       setInterviewState((current) => {
         if (!current?.interview) return current;

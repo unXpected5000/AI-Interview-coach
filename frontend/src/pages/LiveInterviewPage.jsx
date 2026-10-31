@@ -12,6 +12,7 @@ import { getInterviewerState } from "../utils/interviewState.js";
 import FloatingWebcamPanel from "../components/interview/FloatingWebcamPanel.jsx";
 import { startLocalSpeechCapture } from "../utils/localSpeechCapture.js";
 import { mergeSpeechTranscriptSegments, terminateLocalSpeechWorker, transcribeAudioBlob, transcribeAudioWindow, warmLocalSpeechModel } from "../utils/localSpeechTranscription.js";
+import { recordConsent } from "../api/accountApi.js";
 
 function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -28,6 +29,7 @@ export default function LiveInterviewPage() {
   const [answers, setAnswers] = useState({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [cameraOn, setCameraOn] = useState(false);
+  const [audioDisclosureAccepted, setAudioDisclosureAccepted] = useState(false);
   const [interactionMode, setInteractionMode] = useState("voice");
   const [callActive, setCallActive] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -490,6 +492,10 @@ export default function LiveInterviewPage() {
 
   async function changeInteractionMode(mode) {
     if (mode === interactionMode) return;
+    if (mode === "voice" && !audioDisclosureAccepted) {
+      setError("Review and accept the microphone processing notice before switching to voice.");
+      return;
+    }
     window.clearTimeout(recognitionRetryTimerRef.current);
     recognitionRetryTimerRef.current = null;
     if (recognitionRef.current || localSpeechCaptureRef.current || localSpeechBlobRef.current?.size) {
@@ -513,6 +519,13 @@ export default function LiveInterviewPage() {
       transcriptRef.current = draftRef.current;
       listen(false);
     }
+  }
+
+  async function withdrawAudioAuthorization() {
+    await changeInteractionMode("text");
+    setAudioDisclosureAccepted(false);
+    recordConsent("microphone_processing", "withdrawn").catch(() => {});
+    setError("Voice processing stopped. Continue in text mode or review the disclosure before enabling voice again.");
   }
 
   async function stopRecognitionAndWait() {
@@ -631,6 +644,7 @@ export default function LiveInterviewPage() {
         answer_status: interruptedQuestionRef.current === currentQuestion.question_id ? "interrupted" : "answered",
       });
       setAnswers((current) => ({ ...current, [currentQuestion.question_id]: saved }));
+      if (saved.difficulty_state) setSession((current) => current ? { ...current, difficulty: saved.difficulty_state } : current);
       if (saved.answer_status === "evaluation_failed") setError("Your response was saved, but its evaluation was unavailable. It will be labeled separately in the report.");
       let updatedQuestions = questions.map((item) => item.question_id === saved.adapted_question?.question_id ? saved.adapted_question : item);
       if (saved.follow_up_question && !updatedQuestions.some((item) => item.question_id === saved.follow_up_question.question_id)) {
@@ -814,7 +828,7 @@ export default function LiveInterviewPage() {
       <div className="grid gap-5 xl:grid-cols-[1.5fr_0.75fr]">
         <section className="overflow-hidden rounded-2xl bg-[#151719] p-4 text-white shadow-xl sm:p-6">
           <div className="relative min-h-[460px] overflow-hidden rounded-xl bg-gradient-to-br from-slate-800 via-slate-900 to-teal-950">
-            <div className="absolute left-4 top-4 z-40 flex items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white backdrop-blur"><span className={`size-2 rounded-full ${callActive ? isListening ? "bg-emerald-400" : "bg-amber-300" : "bg-stone-400"}`} />{callActive ? isSpeaking ? "Interviewer speaking" : isListening ? microphoneState === "speech_detected" ? "Speech detected" : "Listening for speech" : "Interview active" : "Ready to join"}</div>
+            <div className="absolute left-4 top-4 z-40 flex flex-wrap items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white backdrop-blur"><span className={`size-2 rounded-full ${callActive ? isListening ? "bg-emerald-400" : "bg-amber-300" : "bg-stone-400"}`} />{callActive ? isSpeaking ? "Interviewer speaking" : isListening ? microphoneState === "speech_detected" ? "Speech detected" : "Listening for speech" : "Interview active" : "Ready to join"}<span aria-label="Interview difficulty setting" className="border-l border-white/30 pl-2">{String(session?.difficulty?.initial ?? "medium").replaceAll("_", " ").toUpperCase()} · {session?.difficulty?.mode ?? "adaptive"}</span></div>
             <div className={`interviewer-stage-avatar${cameraOn ? " interviewer-stage-avatar--camera" : ""}`}><InterviewerAvatar state={avatarState} speechActivity={speechActivity} hasSpeechBoundaryEvents={hasSpeechBoundaryEvents} /></div>
             {callActive && cameraOn ? <FloatingWebcamPanel videoRef={videoRef} cameraError={cameraError} onClose={toggleCamera} /> : null}
             {callActive && cameraOn && cameraAnalysisError && !cameraError ? <div className="absolute bottom-28 left-4 z-20 max-w-[45%] rounded-lg bg-amber-200 px-3 py-2 text-xs font-semibold text-amber-950">{cameraAnalysisError}</div> : null}
@@ -829,11 +843,14 @@ export default function LiveInterviewPage() {
               </div>
               {interactionMode === "voice" ? <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running} onClick={handleMicrophoneTest} type="button">{microphoneTest.running && microphoneTest.kind === "microphone" ? "Testing microphone…" : "Test microphone"}</button> : null}
               {interactionMode === "voice" && speechSupported ? <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running} onClick={handleSpeechRecognitionTest} type="button">{microphoneTest.running && microphoneTest.kind === "speech" ? "Testing speech…" : "Test speech recognition"}</button> : null}
-              <button className="rounded-full bg-emerald-400 px-6 py-3 text-sm font-black text-stone-950 hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running} onClick={handleJoinCall} type="button">Join call</button>
+              <label className="basis-full rounded-lg border border-white/20 bg-black/25 p-3 text-left text-xs leading-5 text-slate-200"><input checked={audioDisclosureAccepted} className="mr-2 align-middle" onChange={(event) => { setAudioDisclosureAccepted(event.target.checked); recordConsent("microphone_processing", event.target.checked ? "accepted" : "withdrawn").catch(() => {}); }} type="checkbox" />Voice mode only: browser speech recognition may transmit microphone audio to its provider. The local Whisper fallback transcribes on this device and only the transcript is saved. Microphone permission is requested when you join. This repository does not implement OpenAI Realtime.</label>
+              <button className="rounded-full bg-emerald-400 px-6 py-3 text-sm font-black text-stone-950 hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60" disabled={microphoneTest.running || (interactionMode === "voice" && !audioDisclosureAccepted)} onClick={handleJoinCall} type="button">Join call</button>
             </> : <>
+              {interactionMode === "text" && !audioDisclosureAccepted ? <label className="basis-full rounded-lg border border-white/20 bg-black/25 p-3 text-left text-xs leading-5 text-slate-200"><input checked={audioDisclosureAccepted} className="mr-2 align-middle" onChange={(event) => { setAudioDisclosureAccepted(event.target.checked); recordConsent("microphone_processing", event.target.checked ? "accepted" : "withdrawn").catch(() => {}); }} type="checkbox" />Before switching to voice: browser speech recognition may transmit audio to its provider. The local Whisper fallback transcribes on-device and only the transcript is saved.</label> : null}
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={toggleCamera} type="button">{cameraOn ? "Turn camera off" : "Turn camera on"}</button>
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={isSaving} onClick={() => changeInteractionMode(interactionMode === "voice" ? "text" : "voice")} type="button">Switch to {interactionMode === "voice" ? "text" : "voice"}</button>
               {interactionMode === "voice" ? <button aria-label={micMuted ? "Unmute microphone" : "Mute microphone"} className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={isSaving} onClick={toggleMicrophone} type="button">{micMuted ? "Unmute mic" : "Mute mic"}</button> : null}
+              {interactionMode === "voice" ? <button className="rounded-full border border-amber-300 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-100 hover:bg-amber-900/60" onClick={withdrawAudioAuthorization} type="button">Stop voice processing</button> : null}
               {isSpeaking ? <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={interruptInterviewer} type="button">Interrupt & answer</button> : null}
               <button className="rounded-full bg-teal-400 px-5 py-3 text-sm font-black text-stone-950 hover:bg-teal-300 disabled:opacity-40" disabled={isSaving || isSpeaking} onClick={handleSubmitAnswer} type="button">{isSaving ? "Saving answer…" : isListening ? "Finish answer" : "Submit answer"}</button>
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:opacity-40" disabled={isSaving || Boolean(draft.trim())} onClick={handleSkipQuestion} type="button">Skip question</button>

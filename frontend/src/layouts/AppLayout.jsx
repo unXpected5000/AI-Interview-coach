@@ -5,6 +5,7 @@ import ThemeToggle from "../components/ui/ThemeToggle.jsx";
 
 const navItems = [
   { label: "Dashboard", path: "/dashboard", mark: "DB" },
+  { label: "Account & data", path: "/account", mark: "AC" },
   { label: "Start Interview", path: "/interviews/start", mark: "ST" },
   {
     label: "Resume Studio",
@@ -111,6 +112,12 @@ export default function AppLayout() {
       <main className="flex-1 px-5 py-6 sm:px-8 lg:px-10">
         <div className="mx-auto max-w-7xl">
           <Outlet />
+          <footer className="mt-12 flex flex-wrap gap-x-5 gap-y-2 border-t border-stone-200 pt-5 text-xs text-stone-600">
+            <NavLink to="/legal/privacy" className="underline">Privacy</NavLink>
+            <NavLink to="/legal/terms" className="underline">Terms</NavLink>
+            <NavLink to="/legal/refund" className="underline">Refunds</NavLink>
+            <NavLink to="/legal/cookies" className="underline">Cookies & storage</NavLink>
+          </footer>
         </div>
       </main>
     </div>

@@ -1,7 +1,7 @@
 import { apiClient } from "./client.js";
 
-export async function startInterview(resumeId) {
-  const response = await apiClient.post("/interviews/start", { resume_id: resumeId });
+export async function startInterview(resumeId, difficulty = "medium", difficultyMode = "adaptive") {
+  const response = await apiClient.post("/interviews/start", { resume_id: resumeId, difficulty, difficulty_mode: difficultyMode });
   return response.data;
 }
 
@@ -44,6 +44,10 @@ export async function submitAnswer(interviewId, questionId, answerText, meta = {
 export async function completeInterview(interviewId) {
   const response = await apiClient.post(`/interviews/${interviewId}/complete`);
   return response.data;
+}
+
+export async function deleteInterview(interviewId) {
+  return apiClient.delete(`/interviews/${interviewId}`);
 }
 
 export async function exportInterview(interviewId, format) {

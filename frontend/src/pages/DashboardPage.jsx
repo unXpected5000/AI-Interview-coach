@@ -98,6 +98,12 @@ export default function DashboardPage() {
       }
     }
     const topWeaknesses = [...weaknessCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const difficultyStats = ["low", "medium", "hard", "interview_ready"].map((difficulty) => {
+      const rows = completed.flatMap((session) => session.question_scores ?? []).filter((row) => row.difficulty === difficulty);
+      const evaluated = rows.filter((row) => ["answered", "partial", "interrupted"].includes(row.answer_status) && Number.isFinite(Number(row.score)));
+      const attempted = rows.filter((row) => ["answered", "partial", "interrupted", "evaluation_failed"].includes(row.answer_status)).length;
+      return { difficulty, total: rows.length, attempted, completion: rows.length ? Math.round(attempted / rows.length * 100) : 0, average: evaluated.length ? Math.round(evaluated.reduce((sum, row) => sum + Number(row.score), 0) / evaluated.length) : null };
+    });
     const scoreDelta = completed.length > 1
       ? Math.round((completed.at(-1).overall_score ?? 0) - (completed.at(-2).overall_score ?? 0))
       : null;
@@ -113,6 +119,7 @@ export default function DashboardPage() {
       averageFillers,
       completed,
       topWeaknesses,
+      difficultyStats,
       scoreDelta,
     };
   }, [interviews, resumes]);
@@ -223,6 +230,12 @@ export default function DashboardPage() {
           {stats.topWeaknesses.length ? <ol className="mt-5 space-y-3">{stats.topWeaknesses.map(([weakness, count]) => <li className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 p-3" key={weakness}><span className="text-sm text-stone-800">{weakness}</span><span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-bold text-amber-800">{count}×</span></li>)}</ol> : <p className="mt-5 rounded-lg bg-teal-50 p-4 text-sm text-teal-900">Complete a session to get recurring improvement themes and practical next steps here.</p>}
           <Link className="mt-5 inline-flex rounded-full bg-stone-950 px-4 py-2 text-sm font-bold text-white hover:bg-teal-800" to="/interviews/start">Start a practice session</Link>
         </div>
+      </section>
+
+      <section className="mt-6 rounded-lg border border-stone-200 bg-white p-6 shadow-sm" aria-labelledby="difficulty-progress-heading">
+        <h2 id="difficulty-progress-heading" className="text-xl font-bold">Performance by question difficulty</h2>
+        <p className="mt-1 text-sm text-stone-500">Actual question levels across completed interviews. A blank score means no evaluated answer at that level yet.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{stats.difficultyStats.map((item) => <article className="rounded-lg bg-stone-50 p-4" key={item.difficulty}><h3 className="text-sm font-bold uppercase">{item.difficulty.replaceAll("_", " ")}</h3><p className="mt-2 text-sm text-stone-700">Average evaluated score: <strong>{item.average ?? "—"}{item.average === null ? "" : "/100"}</strong></p><p className="mt-1 text-xs text-stone-500">Attempted {item.attempted}/{item.total} ({item.completion}%) · {item.total} question(s)</p></article>)}</div>
       </section>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_0.92fr]">

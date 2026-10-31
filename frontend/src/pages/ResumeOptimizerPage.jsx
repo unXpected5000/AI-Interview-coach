@@ -4,6 +4,7 @@ import { listResumes } from "../api/resumeApi.js";
 import { analyzeResume } from "../api/resumeOptimizerApi.js";
 import DonutScore from "../components/ui/DonutScore.jsx";
 import PageHeader from "../components/ui/PageHeader.jsx";
+import { recordConsent } from "../api/accountApi.js";
 
 export default function ResumeOptimizerPage() {
   const [resumes, setResumes] = useState([]);
@@ -17,6 +18,7 @@ export default function ResumeOptimizerPage() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [aiDisclosureAccepted, setAiDisclosureAccepted] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -100,6 +102,7 @@ export default function ResumeOptimizerPage() {
       <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
         <section className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
           <form className="space-y-4" onSubmit={handleSubmit}>
+            <label className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><input checked={aiDisclosureAccepted} className="mt-1" onChange={(event) => { setAiDisclosureAccepted(event.target.checked); recordConsent("ai_processing", event.target.checked ? "accepted" : "withdrawn").catch(() => {}); }} type="checkbox" /><span>Resume text and the role details you enter will be sent to the configured AI provider for optimization. Review the <a className="underline" href="/legal/privacy">Privacy Policy</a> before continuing.</span></label>
             <label className="block">
               <span className="text-sm font-semibold text-stone-700">Resume</span>
               <select
@@ -151,7 +154,7 @@ export default function ResumeOptimizerPage() {
 
             <button
               className="w-full rounded-full bg-stone-950 px-5 py-3 text-sm font-bold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-400"
-              disabled={isSubmitting || isLoading || !form.resume_id || !form.target_role}
+              disabled={isSubmitting || isLoading || !form.resume_id || !form.target_role || !aiDisclosureAccepted}
               type="submit"
             >
               {isSubmitting ? "Optimizing..." : "Analyze resume"}

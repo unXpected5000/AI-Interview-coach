@@ -55,9 +55,20 @@ def build_assessment_summary(score: Any, question_scores: list[dict] | None) -> 
     )
     if failed:
         note += f" Evaluation was unavailable for {failed} question(s); those questions were excluded from the performance denominator."
+    readiness = classify_readiness(score) if has_scored_or_zero_rubric_item else "Assessment unavailable"
+    evaluated_difficulties = {
+        str(row.get("difficulty", "")).lower()
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("answer_status", "answered")) in {"answered", "partial", "interrupted"}
+        and row.get("score") is not None
+    }
+    if readiness == "Strong interview readiness" and evaluated_difficulties and evaluated_difficulties <= {"low", "easy"}:
+        readiness = "Good progress"
+        note += " High scores were demonstrated only on LOW-difficulty questions; this is not evidence of readiness for more demanding interviews."
     return {
         "performance_score": round(max(0.0, min(100.0, numeric_score)), 2),
-        "readiness_category": classify_readiness(score) if has_scored_or_zero_rubric_item else "Assessment unavailable",
+        "readiness_category": readiness,
         "answered_questions": answered,
         "evaluated_questions": evaluated,
         "total_questions": total,
