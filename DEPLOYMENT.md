@@ -26,6 +26,7 @@ Create a Pages project connected to this repository with:
 - Build output directory: `dist`
 - Runtime environment variable `BACKEND_API_ORIGIN`: `https://<render-service>.onrender.com` (HTTPS origin only; no `/api` suffix)
 - Build environment variable `VITE_GOOGLE_CLIENT_ID`: the same Google OAuth Web application client ID configured on Render
+- Build environment variables for the legal pages: `VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, `VITE_LEGAL_POSTAL_ADDRESS`, `VITE_LEGAL_GOVERNING_LAW`, `VITE_LEGAL_MINIMUM_AGE` (and optionally `VITE_LEGAL_INSTITUTION`)
 
 Create that OAuth client in Google Cloud Console. Add the exact local and deployed frontend origins to **Authorized JavaScript origins** (for example `http://localhost:5173`, `http://127.0.0.1:5173`, and your Cloudflare Pages domain). No client secret is used by this GIS credential flow. The backend validates each ID token signature, expiry, issuer, and audience before accepting it.
 

@@ -14,6 +14,8 @@ import { startLocalSpeechCapture } from "../utils/localSpeechCapture.js";
 import { mergeSpeechTranscriptSegments, terminateLocalSpeechWorker, transcribeAudioBlob, transcribeAudioWindow, warmLocalSpeechModel } from "../utils/localSpeechTranscription.js";
 import { recordConsent } from "../api/accountApi.js";
 import { getErrorMessage } from "../utils/errorMessage.js";
+import ErrorPage from "../components/ui/ErrorPage.jsx";
+import { errorPageKindFor } from "../utils/errorPages.js";
 import { cameraMetricsPayload } from "../utils/mediapipeAnalyzer.js";
 import { bridgeBeforeQuestion, formatClock, shouldAutoFinish, speechWatchdogMs, turnLabel } from "../utils/liveCall.js";
 import CameraSignalsPanel, { CameraConsentPrompt } from "../components/interview/CameraSignalsPanel.jsx";
@@ -51,6 +53,7 @@ export default function LiveInterviewPage() {
   const [clock, setClock] = useState(() => Date.now());
   const [responseGapMs, setResponseGapMs] = useState(null);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [speechMode, setSpeechMode] = useState("");
@@ -124,7 +127,7 @@ export default function LiveInterviewPage() {
         const firstUnanswered = interview.questions.findIndex((question) => !answerMap[question.question_id]);
         setCurrentIndex(firstUnanswered >= 0 ? firstUnanswered : 0);
       })
-      .catch((requestError) => setError(getErrorMessage(requestError, "Unable to load the interview.")))
+      .catch((requestError) => { setLoadError(requestError); setError(getErrorMessage(requestError, "Unable to load the interview.")); })
       .finally(() => active && setIsLoading(false));
     return () => {
       active = false;
@@ -901,7 +904,7 @@ export default function LiveInterviewPage() {
   const answerSeconds = callActive && isListening && answerStartRef.current ? (clock - answerStartRef.current) / 1000 : 0;
 
   if (isLoading) return <div className="rounded-xl bg-white p-6 text-sm text-stone-600">Setting up your interview room…</div>;
-  if (!session) return <div className="rounded-xl bg-white p-6 text-sm text-rose-700">{error || "Interview not found."}</div>;
+  if (!session) return <ErrorPage detail={error} kind={errorPageKindFor(loadError) ?? "404"} onRetry={() => window.location.reload()} />;
 
   return (
     <section className="animate-rise">

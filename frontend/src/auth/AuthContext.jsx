@@ -21,6 +21,9 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  // A non-401 failure while restoring a saved session (server asleep, offline).
+  // The token is kept so a retry can restore the session.
+  const [sessionError, setSessionError] = useState(null);
   // Held in memory only (never storage or URL state) so the verification page
   // can submit the password the user just typed without asking twice.
   const pendingCredentialsRef = useRef(null);
@@ -43,6 +46,7 @@ export function AuthProvider({ children }) {
       } catch (requestError) {
         if (!isMounted) return;
         if (shouldClearStoredSession(requestError)) clearAccessToken();
+        else setSessionError(requestError);
         setUser(null);
       } finally {
         if (isMounted) {
@@ -120,6 +124,7 @@ export function AuthProvider({ children }) {
       user,
       isAuthenticated: Boolean(user),
       isLoading,
+      sessionError,
       login,
       loginWithGoogle,
       register,
@@ -129,7 +134,7 @@ export function AuthProvider({ children }) {
       updateProfile,
       logout,
     }),
-    [user, isLoading, login, loginWithGoogle, register, verifyEmail, resendVerification, hasRememberedPassword, updateProfile, logout],
+    [user, isLoading, sessionError, login, loginWithGoogle, register, verifyEmail, resendVerification, hasRememberedPassword, updateProfile, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

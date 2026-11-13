@@ -47,7 +47,15 @@ Copy `backend/.env.example` to `backend/.env` and set the MongoDB URI and any de
 
 ## Run locally
 
-From the project folder, run `run_project.bat` for the one-step launcher, or use two terminals:
+Double-click **`Start AI Interview Coach.bat`** in the project folder (or run `scripts\create_desktop_shortcut.ps1` once to add Start/Stop shortcuts to your desktop). The launcher:
+
+1. checks Python 3.11+ and Node.js;
+2. creates `backend\.venv`, installs backend requirements and frontend packages on first run (and again when they change);
+3. creates `backend\.env` on first run with a generated JWT secret and development settings, where verification codes are printed to the backend window until SMTP is configured;
+4. starts MongoDB using whatever is already on port 27017, the Windows `MongoDB` service, or a Docker container (`ai-interview-coach-mongo`, data kept in the `ai-interview-coach-mongo-data` volume; Docker Desktop is started if needed and the first run downloads the `mongo:7.0` image);
+5. starts the API and web app in their own windows and opens http://127.0.0.1:5173.
+
+`Stop AI Interview Coach.bat` stops the servers and the MongoDB container (data is kept). `run_project.bat` still works and calls the same launcher. To run things manually, use two terminals:
 
 ```powershell
 cd backend
@@ -96,6 +104,10 @@ Tests use local/fake dependencies where possible and do not require a live Mongo
 - `/api/interviews/{id}/export/{pdf|json|transcript}`: owner-scoped downloads
 - `/api/account/export`, `/api/account/consent`: authenticated data export and consent history
 - `DELETE /api/account`: permanent account and dependent-record deletion
+
+## Legal pages
+
+The Privacy Policy, Terms, Cookies, and Refund pages describe what the code actually does. Operator details are read from frontend build variables (`VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, `VITE_LEGAL_POSTAL_ADDRESS`, `VITE_LEGAL_GOVERNING_LAW`, `VITE_LEGAL_MINIMUM_AGE`, optional `VITE_LEGAL_INSTITUTION`); unset values are shown as "not configured". Have the documents reviewed before a public launch.
 
 ## Notes and limitations
 

@@ -9,6 +9,8 @@ import { WebcamPanel } from "../components/interview/WebcamPanel.jsx";
 import { buildSpeechAnalysis } from "../utils/speechAnalysis.js";
 import { createSpeechRecognition, getSpeechRecognitionConstructor, getSpeechRecognitionMode } from "../utils/speechRecognition.js";
 import { getErrorMessage } from "../utils/errorMessage.js";
+import ErrorPage from "../components/ui/ErrorPage.jsx";
+import { errorPageKindFor } from "../utils/errorPages.js";
 
 export default function InterviewPage() {
   const { interviewId } = useParams();
@@ -38,6 +40,7 @@ export default function InterviewPage() {
   const [speechError, setSpeechError] = useState("");
   const [speechMode, setSpeechMode] = useState("");
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState(null);
   // Returns consented, derived camera numbers for the current question (or {}).
   const cameraPayloadRef = useRef(() => ({}));
 
@@ -84,6 +87,7 @@ export default function InterviewPage() {
         setCurrentIndex(firstUnansweredIndex >= 0 ? firstUnansweredIndex : 0);
       } catch (requestError) {
         if (active) {
+          setLoadError(requestError);
           setError(
             getErrorMessage(requestError, "Unable to load interview."),
           );
@@ -444,6 +448,10 @@ export default function InterviewPage() {
       }
 
       setCurrentIndex((value) => Math.min(value + 1, questions.length - 1));
+  }
+
+  if (!isLoading && !interviewState && errorPageKindFor(loadError)) {
+    return <ErrorPage detail={error} kind={errorPageKindFor(loadError)} onRetry={() => window.location.reload()} />;
   }
 
   if (isLoading) {

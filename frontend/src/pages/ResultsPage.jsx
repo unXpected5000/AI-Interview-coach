@@ -8,6 +8,8 @@ import ProgressBar from "../components/ui/ProgressBar.jsx";
 import ReportSection from "../components/ui/ReportSection.jsx";
 import ExportButtons from "../components/interview/ExportButtons.jsx";
 import { getErrorMessage } from "../utils/errorMessage.js";
+import ErrorPage from "../components/ui/ErrorPage.jsx";
+import { errorPageKindFor } from "../utils/errorPages.js";
 import CameraSignalsChart from "../components/interview/CameraSignalsChart.jsx";
 import { CAMERA_LIMITS_TEXT } from "../components/interview/CameraSignalsPanel.jsx";
 
@@ -17,6 +19,7 @@ export default function ResultsPage() {
   const [interviewState, setInterviewState] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   async function removeInterview() {
@@ -37,6 +40,7 @@ export default function ResultsPage() {
         }
       } catch (requestError) {
         if (active) {
+          setLoadError(requestError);
           setError(
             getErrorMessage(requestError, "Unable to load results."),
           );
@@ -66,6 +70,10 @@ export default function ResultsPage() {
   };
   const technicalDepth = averageMetric("technical_depth_score", answeredScores.filter((item) => !["behavioral", "situational"].includes(item.question_type)));
   const answerStructure = averageMetric("structure_score");
+
+  if (!isLoading && !interviewState && errorPageKindFor(loadError)) {
+    return <ErrorPage detail={error} kind={errorPageKindFor(loadError)} onRetry={() => window.location.reload()} />;
+  }
 
   if (isLoading) {
     return (
