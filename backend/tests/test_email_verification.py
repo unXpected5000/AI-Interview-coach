@@ -259,3 +259,22 @@ def test_registration_rejects_unknown_department_and_year():
     with pytest.raises(auth_module.ProfileValidationError):
         asyncio.run(service.register("Student", "x@example.com", PASSWORD, "Computer Science", 99))
     assert users(database) == []
+
+
+def test_reregistering_a_legacy_address_never_rewrites_its_credentials():
+    service, database, email = make_service()
+    original_hash = hash_password(PASSWORD)
+    asyncio.run(database["users"].insert_one({
+        "name": "Legacy Owner", "email": "legacy@example.com", "password_hash": original_hash,
+        "google_id": None, "department": "Civil", "created_at": 1, "updated_at": 1,
+    }))
+    result = asyncio.run(service.register("Intruder", "legacy@example.com", "intruder password", "Computer Science", 1))
+    assert result["verification_required"] is True
+    stored = users(database)[0]
+    assert stored["password_hash"] == original_hash
+    assert stored["name"] == "Legacy Owner" and stored["department"] == "Civil"
+    # The real owner receives a code and verifies with the original password.
+    code = email.sent[-1][1]
+    with pytest.raises(InvalidVerificationError):
+        asyncio.run(service.verify_email("legacy@example.com", code, "intruder password"))
+    assert asyncio.run(service.verify_email("legacy@example.com", code, PASSWORD))["access_token"]

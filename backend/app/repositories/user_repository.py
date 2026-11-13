@@ -83,12 +83,17 @@ class UserRepository:
         return await self.collection.find_one({"_id": object_id})
 
     async def replace_pending_registration(self, user_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
-        """Overwrite an unverified password registration. Never touches verified accounts."""
+        """Overwrite a pending registration from the verification flow.
+
+        Only documents explicitly marked ``email_verified: False`` qualify. Legacy
+        accounts (no ``email_verified`` field) and verified accounts are never
+        rewritten, so a re-registration cannot replace their credentials.
+        """
         object_id = _object_id(user_id)
         if object_id is None:
             return None
         return await self.collection.find_one_and_update(
-            {"_id": object_id, "email_verified": {"$ne": True}, "google_id": {"$in": [None]}},
+            {"_id": object_id, "email_verified": False, "google_id": {"$in": [None]}},
             {"$set": {**values, "updated_at": _now()}},
             return_document=ReturnDocument.AFTER,
         )

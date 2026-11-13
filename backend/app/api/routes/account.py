@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.api.deps import get_current_user
 from app.db.mongodb import get_database
+from app.models.answer_model import ANSWER_KEY_FIELDS
 from app.utils.mongo import make_json_safe
 
 router = APIRouter(prefix="/account", tags=["account"])
@@ -18,6 +19,20 @@ COLLECTIONS = ("users", "resumes", "interviews", "answers", "scores", "resume_op
 
 
 EXCLUDED_ACCOUNT_FIELDS = ("password_hash", "verification")
+
+
+def _redact_active_answer_keys(collection: str, row: dict, completed_ids: set[str]) -> dict:
+    if collection == "interviews" and str(row.get("_id")) not in completed_ids:
+        row = {**row, "questions": [
+            {key: value for key, value in question.items() if key not in ANSWER_KEY_FIELDS}
+            for question in row.get("questions", []) if isinstance(question, dict)
+        ]}
+    elif collection == "answers" and str(row.get("interview_id")) not in completed_ids:
+        row = {key: value for key, value in row.items() if key not in ANSWER_KEY_FIELDS}
+        evaluation = row.get("evaluation")
+        if isinstance(evaluation, dict):
+            row["evaluation"] = {key: value for key, value in evaluation.items() if key not in ANSWER_KEY_FIELDS}
+    return row
 
 
 async def _stream_account_export(uid: str) -> AsyncIterator[bytes]:
@@ -30,10 +45,17 @@ async def _stream_account_export(uid: str) -> AsyncIterator[bytes]:
     yield b'{"account": '
     yield json.dumps(make_json_safe(user), ensure_ascii=False).encode("utf-8")
     yield b', "excluded": ["password hashes, email verification codes, and authentication secrets"], "collections": {'
+    # Answer keys stay hidden for interviews that are still active, as in the
+    # interview API; completed interviews export in full.
+    completed_ids = {
+        str(row["_id"])
+        async for row in database.interviews.find({"user_id": uid, "status": "completed"}, {"_id": 1})
+    }
     for index, name in enumerate(COLLECTIONS[1:]):
         yield (", " if index else "").encode() + json.dumps(name).encode() + b": ["
         first = True
         async for row in database[name].find({"user_id": uid}):
+            row = _redact_active_answer_keys(name, row, completed_ids)
             yield (b"" if first else b", ") + json.dumps(make_json_safe(row), ensure_ascii=False).encode("utf-8")
             first = False
         yield b"]"

@@ -95,6 +95,12 @@ class AuthService:
             if is_email_verified(existing) or existing.get("google_id"):
                 # Do not reveal that the address already has an account.
                 return pending
+            if existing.get("email_verified") is not False:
+                # Legacy password account: never rewrite its credentials or profile.
+                # Send a code so the real owner can verify with their existing password.
+                if existing.get("password_hash"):
+                    await self._send_code_quietly(existing)
+                return pending
             user = await self.user_repository.replace_pending_registration(
                 str(existing["_id"]),
                 {"name": name.strip(), "password_hash": password_hash, "department": department,

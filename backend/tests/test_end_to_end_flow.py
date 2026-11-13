@@ -123,6 +123,11 @@ def test_full_student_staff_and_operator_workflow(api):
     if body.get("follow_up_question"):
         assert body["follow_up_question"]["expected_answer"] is None
 
+    # The account export must not reveal the answer key while the interview is active.
+    active_export = client.get("/api/account/export", headers=student_headers)
+    assert active_export.status_code == 200
+    assert "expected_answer" not in active_export.text and "expected_points" not in active_export.text
+
     skipped = client.post(f"/api/interviews/{interview['id']}/answer", headers=student_headers, json={"question_id": second["question_id"], "answer_text": "", "answer_status": "skipped"})
     assert skipped.status_code == 200 and skipped.json()["answer_status"] == "skipped"
     invalid = client.post(f"/api/interviews/{interview['id']}/answer", headers=student_headers, json={"question_id": "not-a-number"})
@@ -137,6 +142,7 @@ def test_full_student_staff_and_operator_workflow(api):
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
     export = client.get("/api/account/export", headers=student_headers)
     assert export.status_code == 200 and "password_hash" not in export.text and "code_hash" not in export.text
+    assert "expected_answer" in export.text  # completed interviews export in full
 
     # Operator bootstrap via OPERATOR_EMAILS, then promote an HOD.
     operator_headers, operator = signup(client, email_capture, "ops@example.com")
