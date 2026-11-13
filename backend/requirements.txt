@@ -1,18 +1,19 @@
-fastapi
-uvicorn[standard]
-pydantic
-pydantic-settings
-motor
-pymongo
-python-dotenv
-python-multipart
-pymupdf
-sentence-transformers
-numpy
-passlib[bcrypt]
+# Production runtime dependencies, pinned to the versions verified locally with
+# Python 3.11.9 (the version pinned for Render in render.yaml). Upgrade
+# deliberately and re-run the test suite; do not loosen these pins blindly.
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.16.1
+motor==3.7.1
+pymongo==4.19.0
+python-dotenv==1.2.4
+python-multipart==0.0.32
+pymupdf==2.0
+passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-python-jose[cryptography]
-email-validator
-google-auth[requests]>=2.30,<3
-pytest
-httpx
+python-jose[cryptography]==3.5.0
+email-validator==2.3.0
+google-auth[requests]==2.62.0
+# Used at runtime by the LLM client (and by FastAPI's TestClient in tests).
+httpx==0.28.1

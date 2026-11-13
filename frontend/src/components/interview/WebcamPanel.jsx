@@ -1,37 +1,59 @@
-import React from "react";
+import { useEffect, useState } from "react";
 import { useWebcam } from "../../hooks/useWebcam.js";
 import { useMediaPipe } from "../../hooks/useMediaPipe.js";
+import { cameraMetricsPayload } from "../../utils/mediapipeAnalyzer.js";
+import { recordConsent } from "../../api/accountApi.js";
+import CameraSignalsPanel, { CameraConsentPrompt } from "./CameraSignalsPanel.jsx";
 
-export function WebcamPanel({ onMetricsUpdate }) {
-  const [cameraOn, setCameraOn] = React.useState(false);
+/**
+ * Optional practice-mode camera. `segmentKey` starts a new measurement window
+ * per question; `payloadRef.current()` returns the consented metrics to save.
+ */
+export function WebcamPanel({ segmentKey, payloadRef }) {
+  const [cameraOn, setCameraOn] = useState(false);
+  const [askingConsent, setAskingConsent] = useState(false);
+  const [saveConsent, setSaveConsent] = useState(false);
   const { videoRef, error } = useWebcam(cameraOn);
-  const { metrics, isReady, error: analysisError } = useMediaPipe(videoRef, cameraOn);
+  const { metrics, isReady, error: analysisError, postureAvailable, snapshot } = useMediaPipe(videoRef, cameraOn, { segmentKey });
 
-  React.useEffect(() => {
-    if (onMetricsUpdate) {
-      onMetricsUpdate(cameraOn && isReady && metrics.sample_count > 0 ? metrics : {});
-    }
-  }, [cameraOn, isReady, metrics, onMetricsUpdate]);
+  useEffect(() => {
+    if (!payloadRef) return undefined;
+    payloadRef.current = () => (cameraOn && isReady && !error ? cameraMetricsPayload(snapshot(), { consent: saveConsent }) : {});
+    return () => { payloadRef.current = () => ({}); };
+  });
+
+  function chooseConsent(save) {
+    setSaveConsent(save);
+    setAskingConsent(false);
+    setCameraOn(true);
+    recordConsent("camera_processing", save ? "accepted" : "rejected").catch(() => {});
+  }
+
+  function turnOff() {
+    setCameraOn(false);
+    setSaveConsent(false);
+  }
 
   if (cameraOn && error) {
     return (
       <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 shadow-sm">
-        <p className="font-bold">Webcam Error</p>
+        <p className="font-bold">Camera unavailable</p>
         <p>{error}</p>
-        <button className="mt-3 rounded-full border border-rose-300 px-3 py-1.5 text-xs font-bold" onClick={() => setCameraOn(false)} type="button">Turn camera off</button>
+        <button className="mt-3 rounded-full border border-rose-300 px-3 py-1.5 text-xs font-bold" onClick={turnOff} type="button">Turn camera off</button>
       </div>
     );
   }
 
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-bold text-stone-950">Optional camera</h2>
-        <button className="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-bold" onClick={() => setCameraOn((enabled) => !enabled)} type="button">{cameraOn ? "Turn camera off" : "Enable camera"}</button>
-        <span className={`rounded-full px-3 py-1 text-xs font-bold ${isReady ? 'bg-teal-100 text-teal-700' : 'bg-stone-200 text-stone-600'}`}>
-          {!cameraOn ? "Off" : isReady ? "Local tracking active" : analysisError ? "Preview only" : "Loading local model…"}
+        <button className="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-bold" onClick={() => (cameraOn ? turnOff() : setAskingConsent(true))} type="button">{cameraOn ? "Turn camera off" : "Enable camera"}</button>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold ${isReady ? "bg-teal-100 text-teal-700" : "bg-stone-200 text-stone-600"}`}>
+          {!cameraOn ? "Off" : isReady ? (saveConsent ? "Local tracking · saving numbers" : "Local tracking · preview only") : analysisError ? "Preview only" : "Loading local model…"}
         </span>
       </div>
+      {askingConsent ? <div className="mb-4"><CameraConsentPrompt onCancel={() => setAskingConsent(false)} onChoose={chooseConsent} /></div> : null}
 
       <div className="relative aspect-video overflow-hidden rounded-lg bg-stone-900">
         {!cameraOn ? <div className="absolute inset-0 grid place-items-center p-6 text-center text-sm text-stone-300">Camera is off. Enable it only if you want local framing feedback.</div> : null}
@@ -41,31 +63,17 @@ export function WebcamPanel({ onMetricsUpdate }) {
           playsInline
           muted
           aria-label="Local webcam preview"
-          className={`h-full w-full object-cover transform -scale-x-100 ${cameraOn ? "" : "hidden"}`}
+          className={`h-full w-full -scale-x-100 transform object-cover ${cameraOn ? "" : "hidden"}`}
         />
-        
-        {metrics.coachingSuggestions && metrics.coachingSuggestions.length > 0 && (
-          <div className="absolute top-4 left-4 right-4 flex flex-col gap-2 pointer-events-none z-10">
-            {metrics.coachingSuggestions.map((suggestion, idx) => (
-              <div 
-                key={idx} 
-                className={`self-start rounded-md px-3 py-1.5 text-xs font-bold shadow-sm backdrop-blur-md ${
-                  suggestion.type === 'warning' 
-                    ? 'bg-amber-500/80 text-amber-950' 
-                    : 'bg-teal-500/80 text-teal-950'
-                }`}
-              >
-                {suggestion.text}
-              </div>
+        {metrics.coachingSuggestions?.length ? (
+          <div className="pointer-events-none absolute left-4 right-4 top-4 z-10 flex flex-col gap-2">
+            {metrics.coachingSuggestions.map((suggestion) => (
+              <div className="self-start rounded-md bg-amber-500/80 px-3 py-1.5 text-xs font-bold text-amber-950 shadow-sm" key={suggestion.text}>{suggestion.text}</div>
             ))}
           </div>
-        )}
-
-        {cameraOn && isReady ? <div className="absolute bottom-0 left-0 right-0 bg-stone-950/80 p-3 text-white backdrop-blur-sm flex flex-wrap gap-4">
-          {[["Face visible", `${metrics.face_visibility_pct}%`], ["Centered", `${metrics.centered_frame_pct}%`], ["Movement index", metrics.head_movement_index]].map(([label, value]) => <div className="flex flex-col" key={label}><span className="text-[10px] font-bold uppercase tracking-wider text-teal-200">{label}</span><span className="font-mono text-sm font-bold">{value}</span></div>)}
-        </div> : null}
+        ) : null}
       </div>
-      <p className="mt-3 text-xs text-stone-500">Camera frames stay on this device. These approximate tracking values describe framing only, not confidence, emotion, or performance.</p>
+      {cameraOn && isReady ? <div className="mt-4"><CameraSignalsPanel consent={saveConsent} metrics={metrics} postureAvailable={postureAvailable} /></div> : null}
       {analysisError ? <p className="mt-1 text-xs text-amber-700">{analysisError}</p> : null}
     </div>
   );

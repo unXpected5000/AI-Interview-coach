@@ -8,13 +8,9 @@ import VoiceMetricsPanel from "../components/interview/VoiceMetricsPanel.jsx";
 import { WebcamPanel } from "../components/interview/WebcamPanel.jsx";
 import { buildSpeechAnalysis } from "../utils/speechAnalysis.js";
 import { createSpeechRecognition, getSpeechRecognitionConstructor, getSpeechRecognitionMode } from "../utils/speechRecognition.js";
-
-function formatSeconds(value) {
-  const total = Math.max(0, Number(value || 0));
-  const minutes = Math.floor(total / 60);
-  const seconds = Math.round(total % 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
+import { getErrorMessage } from "../utils/errorMessage.js";
+import ErrorPage from "../components/ui/ErrorPage.jsx";
+import { errorPageKindFor } from "../utils/errorPages.js";
 
 export default function InterviewPage() {
   const { interviewId } = useParams();
@@ -44,7 +40,9 @@ export default function InterviewPage() {
   const [speechError, setSpeechError] = useState("");
   const [speechMode, setSpeechMode] = useState("");
   const [error, setError] = useState("");
-  const [webcamMetrics, setWebcamMetrics] = useState({});
+  const [loadError, setLoadError] = useState(null);
+  // Returns consented, derived camera numbers for the current question (or {}).
+  const cameraPayloadRef = useRef(() => ({}));
 
   useEffect(() => {
     let interval;
@@ -89,8 +87,9 @@ export default function InterviewPage() {
         setCurrentIndex(firstUnansweredIndex >= 0 ? firstUnansweredIndex : 0);
       } catch (requestError) {
         if (active) {
+          setLoadError(requestError);
           setError(
-            requestError.response?.data?.detail ?? "Unable to load interview.",
+            getErrorMessage(requestError, "Unable to load interview."),
           );
         }
       } finally {
@@ -380,9 +379,40 @@ export default function InterviewPage() {
         {
           transcript: transcriptToStore,
           speech_analysis: transcriptToStore ? speechAnalysis || undefined : undefined,
-          webcam_metrics: webcamMetrics,
+          webcam_metrics: cameraPayloadRef.current(),
         },
       );
+      await advanceAfterSave(savedAnswer);
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, "Unable to save answer."));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSkip() {
+    if (!currentQuestion) return;
+    if (draft.trim()) {
+      setError("Clear the answer box before skipping, or save it as your answer.");
+      return;
+    }
+    if (recordingState !== 'IDLE') {
+      setError("Stop recording before skipping the question.");
+      return;
+    }
+    setError("");
+    setIsSaving(true);
+    try {
+      const savedAnswer = await submitAnswer(interviewId, currentQuestion.question_id, "", { answer_status: "skipped" });
+      await advanceAfterSave(savedAnswer);
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, "Could not skip this question. Your interview is still open."));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function advanceAfterSave(savedAnswer) {
       setAnswers((current) => ({
         ...current,
         [currentQuestion.question_id]: savedAnswer,
@@ -418,11 +448,10 @@ export default function InterviewPage() {
       }
 
       setCurrentIndex((value) => Math.min(value + 1, questions.length - 1));
-    } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Unable to save answer.");
-    } finally {
-      setIsSaving(false);
-    }
+  }
+
+  if (!isLoading && !interviewState && errorPageKindFor(loadError)) {
+    return <ErrorPage detail={error} kind={errorPageKindFor(loadError)} onRetry={() => window.location.reload()} />;
   }
 
   if (isLoading) {
@@ -452,7 +481,7 @@ export default function InterviewPage() {
       <PageHeader
         eyebrow="Interview Session"
         title="Answer one question at a time"
-        description="Each answer is stored immediately, scored locally with Sentence-BERT, and the final feedback is generated once at completion."
+        description="Each answer is saved immediately and scored on the server with a lightweight word-and-phrase overlap rubric (not deep semantic understanding). Written feedback is generated once at completion. Skipped questions count as zero."
       />
 
       {error ? (
@@ -496,7 +525,7 @@ export default function InterviewPage() {
                       {String(question.question_id).padStart(2, "0")} - {question.skill}
                     </p>
                     <span className="text-xs font-bold text-stone-500">
-                      {hasAnswer ? "Saved" : isActive ? "Current" : "Queued"}
+                      {hasAnswer ? (answers[question.question_id]?.answer_status === "skipped" ? "Skipped" : "Saved") : isActive ? "Current" : "Queued"}
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-5 text-stone-600">
@@ -525,7 +554,7 @@ export default function InterviewPage() {
 
           <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_0.92fr]">
             <div className="space-y-4">
-              <WebcamPanel onMetricsUpdate={setWebcamMetrics} />
+              <WebcamPanel payloadRef={cameraPayloadRef} segmentKey={currentQuestion.question_id} />
               
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
                 <div className="flex items-center justify-between gap-3">
@@ -623,6 +652,15 @@ export default function InterviewPage() {
                   onClick={handleNext}
                 >
                   {currentIndex >= questions.length - 1 ? "Complete interview" : "Save & next"}
+                </button>
+                <button
+                  className="rounded-full border border-amber-300/60 px-5 py-3 text-sm font-bold text-amber-200 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isSaving}
+                  title="Skipped questions contribute 0 to the score"
+                  type="button"
+                  onClick={handleSkip}
+                >
+                  Skip question
                 </button>
               </div>
             </div>

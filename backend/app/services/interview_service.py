@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from app.models.interview_model import serialize_interview, serialize_interview_summary
+from app.models.interview_model import serialize_interview, serialize_interview_summary, serialize_question
+from app.services.camera_metrics import normalize_webcam_metrics, summarize_webcam
 from app.models.answer_model import serialize_answer
 from app.models.score_model import serialize_score
 from app.repositories.answer_repository import AnswerRepository
@@ -54,12 +55,20 @@ class InterviewService:
                 detail="Resume not found.",
             )
 
-        existing = await self.interview_repository.get_by_user_and_resume(user_id, resume_id)
-        if existing is not None:
-            return serialize_interview(existing)
-
         if difficulty not in {"low", "medium", "hard", "interview_ready"}:
             raise HTTPException(status_code=422, detail="Choose low, medium, hard, or interview_ready difficulty.")
+        if difficulty_mode not in {"fixed", "adaptive"}:
+            raise HTTPException(status_code=422, detail="Choose fixed or adaptive difficulty mode.")
+
+        # Resume an active session only when it was started with the same settings.
+        # A different difficulty or mode starts a new interview; the other one is kept.
+        for existing in await self.interview_repository.list_active_by_user_and_resume(user_id, resume_id):
+            settings_used = existing.get("difficulty") or {}
+            if (
+                settings_used.get("initial", "medium") == difficulty
+                and settings_used.get("mode", "adaptive") == difficulty_mode
+            ):
+                return serialize_interview(existing)
         questions = await self.question_service.generate_questions(resume, {"difficulty": difficulty, "difficulty_mode": difficulty_mode})
         skills = resume.get("extracted_skills", [])
         document = await self.interview_repository.create(
@@ -94,7 +103,7 @@ class InterviewService:
             question_scores, overall_score, communication_score = self.evaluation_service.score_from_questions_and_answers(
                 interview.get("questions", []), answers
             )
-            webcam_summary = self._summarize_webcam(answers)
+            webcam_summary = summarize_webcam(answers)
             refreshed_feedback = self._evidence_feedback(question_scores)
             values = {
                 "overall_score": overall_score,
@@ -119,7 +128,7 @@ class InterviewService:
             or "recorded and analyzed" in str(legacy_report.get("Body Language", ""))
             or any(key in legacy_webcam_summary for key in ("average_eye_contact", "average_smile_frequency"))
         ):
-            webcam_summary = self._summarize_webcam(answers)
+            webcam_summary = summarize_webcam(answers)
             report = self.report_service.generate_report(
                 interview_data=interview,
                 answers_data=answers,
@@ -135,7 +144,7 @@ class InterviewService:
             if expected_readiness and expected_readiness not in saved_performance:
                 # Keep persisted report text, JSON downloads and the canonical
                 # score label synchronized after rubric/classifier changes.
-                webcam_summary = self._summarize_webcam(answers)
+                webcam_summary = summarize_webcam(answers)
                 refreshed_report = self.report_service.generate_report(
                     interview_data=interview,
                     answers_data=answers,
@@ -145,19 +154,26 @@ class InterviewService:
                 score = await self.score_repository.update_report_and_webcam_summary(
                     interview_id, user_id, refreshed_report, webcam_summary
                 ) or {**score, "report": refreshed_report, "webcam_summary": webcam_summary}
+        reveal = interview.get("status") == "completed"
         return {
-            "interview": serialize_interview(interview),
-            "answers": [serialize_answer(answer) for answer in answers],
+            "interview": serialize_interview(interview, include_answer_key=reveal),
+            "answers": [serialize_answer(answer, include_answer_key=reveal) for answer in answers],
             "score": serialize_score(score) if score else None,
         }
 
     async def list_interviews(self, user_id: str) -> list[dict]:
         documents = await self.interview_repository.list_by_user(user_id)
+        interview_ids = [str(document["_id"]) for document in documents]
+        score_documents = await self.score_repository.list_by_interview_ids_and_user(
+            interview_ids, user_id
+        )
+        scores_by_interview = {score.get("interview_id"): score for score in score_documents}
         summaries: list[dict] = []
         for document in documents:
-            score = await self.score_repository.get_by_interview_and_user(str(document["_id"]), user_id)
+            interview_id = str(document["_id"])
+            score = scores_by_interview.get(interview_id)
             if score is not None and score.get("assessment_version", 1) < 2:
-                refreshed = await self.get_interview(str(document["_id"]), user_id)
+                refreshed = await self.get_interview(interview_id, user_id)
                 score = refreshed.get("score")
             summaries.append(serialize_interview_summary(document, score))
         return summaries
@@ -258,7 +274,7 @@ class InterviewService:
             communication_score=score_payload["communication_score"],
             evaluation=score_payload,
             speech_analysis=analysis_payload,
-            webcam_metrics=self._normalize_webcam_metrics(webcam_metrics),
+            webcam_metrics=normalize_webcam_metrics(webcam_metrics),
             answer_status=answer_status,
         )
         score = float(score_payload.get("score") or 0)
@@ -310,12 +326,13 @@ class InterviewService:
                 interview_id, user_id, question_id, candidate
             )
 
-        response = serialize_answer(document)
+        # Active-interview responses never include expected answers or key points.
+        response = serialize_answer(document, include_answer_key=False)
         if answer_status in {"skipped", "evaluation_failed"}:
             response["difficulty_state"] = difficulty_state
             return response
-        response["follow_up_question"] = follow_up_question
-        response["adapted_question"] = adapted_question
+        response["follow_up_question"] = serialize_question(follow_up_question, include_answer_key=False) if follow_up_question else None
+        response["adapted_question"] = serialize_question(adapted_question, include_answer_key=False) if adapted_question else None
         response["difficulty_state"] = difficulty_state
         return response
 
@@ -354,7 +371,7 @@ class InterviewService:
         # The final score is derived only from question evaluations, including zeroes for unanswered questions.
         overall_score = float(computed_overall_score)
         
-        webcam_summary = self._summarize_webcam(answers)
+        webcam_summary = summarize_webcam(answers)
 
         score_data_for_report = {
             "overall_score": overall_score,
@@ -394,41 +411,6 @@ class InterviewService:
             **serialize_score(score_document),
         }
 
-    def _summarize_webcam(self, answers: list[dict]) -> dict:
-        values: dict[str, list[float]] = {
-            "average_face_visibility_pct": [],
-            "average_centered_frame_pct": [],
-            "average_head_movement_index": [],
-        }
-        aliases = {
-            "average_face_visibility_pct": ("face_visibility_pct",),
-            "average_centered_frame_pct": ("centered_frame_pct",),
-            "average_head_movement_index": ("head_movement_index",),
-        }
-        answers_with_metrics = 0
-        for answer in answers:
-            metrics = answer.get("webcam_metrics") or {}
-            had_metric = False
-            for target, keys in aliases.items():
-                value = next((metrics[key] for key in keys if metrics.get(key) is not None), None)
-                try:
-                    number = float(value)
-                except (TypeError, ValueError):
-                    continue
-                if not (number == number and abs(number) != float("inf")):
-                    continue
-                number = max(0.0, min(100.0, number))
-                values[target].append(number)
-                had_metric = True
-            if had_metric:
-                answers_with_metrics += 1
-        summary = {
-            key: round(sum(items) / len(items), 1) if items else None
-            for key, items in values.items()
-        }
-        summary["answers_with_metrics"] = answers_with_metrics
-        return summary
-
     def _evidence_feedback(self, question_scores: list[dict]) -> dict:
         strengths, weaknesses, recommendations, learning_roadmap = [], [], [], []
         for item in question_scores:
@@ -459,21 +441,6 @@ class InterviewService:
             "recommendations": recommendations,
             "learning_roadmap": learning_roadmap,
         }
-
-    def _normalize_webcam_metrics(self, metrics: dict | None) -> dict:
-        if not isinstance(metrics, dict):
-            return {}
-        normalized = {}
-        for key in ("face_visibility_pct", "centered_frame_pct", "head_movement_index"):
-            value = metrics.get(key)
-            if isinstance(value, (int, float)) and value == value and abs(value) != float("inf"):
-                normalized[key] = round(max(0.0, min(100.0, float(value))), 2)
-        sample_count = metrics.get("sample_count")
-        if isinstance(sample_count, int) and not isinstance(sample_count, bool):
-            normalized["sample_count"] = max(0, min(sample_count, 300))
-            if normalized["sample_count"] == 0:
-                return {}
-        return normalized
 
     def _find_question(self, questions: list[dict], question_id: int) -> dict | None:
         for question in questions:

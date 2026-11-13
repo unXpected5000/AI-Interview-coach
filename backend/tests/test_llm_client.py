@@ -13,14 +13,12 @@ def test_gemini_request_uses_api_key_header_not_url_query(monkeypatch) -> None:
             return {"candidates": [{"content": {"parts": [{"text": "{\"ok\":true}"}]}}]}
 
     class MockAsyncClient:
-        def __init__(self, timeout):
+        def __init__(self, *, timeout, limits):
             captured["timeout"] = timeout
+            captured["limits"] = limits
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, traceback):
-            return False
+        async def aclose(self):
+            return None
 
         async def post(self, url, *, headers, json):
             captured.update({"url": url, "headers": headers, "json": json})

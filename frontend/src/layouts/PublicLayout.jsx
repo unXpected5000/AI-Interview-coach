@@ -1,19 +1,18 @@
-import { Link, Outlet } from "react-router-dom";
+import { Outlet } from "react-router-dom";
 import ThemeToggle from "../components/ui/ThemeToggle.jsx";
+import LegalFooter from "../components/ui/LegalFooter.jsx";
 
 export default function PublicLayout() {
   return (
-    <main className="relative min-h-screen bg-gray-50 px-6 py-12">
-      <div className="absolute right-5 top-5">
+    <main className="safe-bottom min-h-screen bg-gray-50 px-4 pb-10 pt-4 sm:px-6 sm:pt-6">
+      <div className="mx-auto flex max-w-md items-center justify-between gap-3">
+        <p className="text-sm font-black tracking-tight text-stone-900">AI Interview Coach</p>
         <ThemeToggle compact />
       </div>
-      <div className="mx-auto max-w-md">
+      <div className="mx-auto mt-6 max-w-md">
         <Outlet />
-        <footer className="mt-8 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-stone-600">
-          <Link className="underline" to="/legal/privacy">Privacy</Link><Link className="underline" to="/legal/terms">Terms</Link><Link className="underline" to="/legal/refund">Refunds</Link><Link className="underline" to="/legal/cookies">Cookies</Link>
-        </footer>
+        <LegalFooter className="mt-8 justify-center" />
       </div>
     </main>
   );
 }
-

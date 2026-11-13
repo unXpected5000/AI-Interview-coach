@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-import math
 from typing import Any
+from app.services.camera_metrics import summarize_webcam
 from app.services.readiness_service import build_assessment_summary
 
 INTERVIEWS_COLLECTION = "interviews"
@@ -31,8 +31,10 @@ def build_interview_document(
     }
 
 
-def serialize_question(question: dict[str, Any]) -> dict[str, Any]:
-    return {
+def serialize_question(question: dict[str, Any], include_answer_key: bool = True) -> dict[str, Any]:
+    """Serialize a question. The expected answer and key points stay server-side
+    while an interview is active so they cannot be read from API responses."""
+    serialized = {
         "question_id": question["question_id"],
         "skill": question["skill"],
         "difficulty": question["difficulty"],
@@ -40,19 +42,32 @@ def serialize_question(question: dict[str, Any]) -> dict[str, Any]:
         "topic_focus": question.get("topic_focus", question["skill"]),
         "source_section": question.get("source_section", "skills"),
         "question": question["question"],
-        "expected_answer": question["expected_answer"],
+        "expected_answer": question.get("expected_answer", ""),
         "expected_points": question.get("expected_points", question.get("key_points", [])),
         "key_points": question.get("expected_points", question.get("key_points", [])),
     }
+    if not include_answer_key:
+        serialized["expected_answer"] = None
+        serialized["expected_points"] = []
+        serialized["key_points"] = []
+    if question.get("follow_up_for") is not None:
+        serialized["follow_up_for"] = question.get("follow_up_for")
+    return serialized
 
 
-def serialize_interview(document: dict[str, Any]) -> dict[str, Any]:
+def interview_reveals_answer_key(document: dict[str, Any]) -> bool:
+    return document.get("status") == "completed"
+
+
+def serialize_interview(document: dict[str, Any], include_answer_key: bool | None = None) -> dict[str, Any]:
+    if include_answer_key is None:
+        include_answer_key = interview_reveals_answer_key(document)
     return {
         "id": str(document["_id"]),
         "user_id": document["user_id"],
         "resume_id": document["resume_id"],
         "skills": document.get("skills", []),
-        "questions": [serialize_question(question) for question in document.get("questions", [])],
+        "questions": [serialize_question(question, include_answer_key) for question in document.get("questions", [])],
         "status": document.get("status", "active"),
         "created_at": document.get("created_at"),
         "completed_at": document.get("completed_at"),
@@ -79,52 +94,16 @@ def serialize_interview_summary(document: dict[str, Any], score: dict[str, Any] 
     if score:
         summary.update(build_assessment_summary(score.get("overall_score", 0), score.get("question_scores", [])))
 
-    if score and score.get("question_scores"):
-        qs = score["question_scores"]
-        speech = [q.get("speech_analysis", {}) for q in qs]
-        speech_with_words = [item for item in speech if item.get("word_count", 0) > 0]
-        wpms = [item.get("words_per_minute", 0) for item in speech_with_words if item.get("duration_seconds", 0) > 0]
-        fillers = [item.get("filler_count", 0) for item in speech_with_words]
-        webcam_values = {
-            "face_visibility_pct": [],
-            "centered_frame_pct": [],
-            "head_movement_index": [],
-        }
-        camera_answers = 0
-        for question_score in qs:
-            metrics = question_score.get("webcam_metrics") or {}
-            had_metrics = False
-            for key in webcam_values:
-                value = metrics.get(key)
-                if value is None:
-                    continue
-                try:
-                    numeric_value = float(value)
-                    if not math.isfinite(numeric_value):
-                        continue
-                    webcam_values[key].append(max(0.0, min(100.0, numeric_value)))
-                    had_metrics = True
-                except (TypeError, ValueError):
-                    continue
-            camera_answers += int(had_metrics)
-        summary["voice_summary"] = {
-            "average_wpm": sum(wpms) / len(wpms) if wpms else 0,
-            "average_fillers": sum(fillers) / len(fillers) if fillers else 0,
-            "answers_with_speech": len(speech_with_words),
-        }
-        summary["webcam_summary"] = {
-            "average_face_visibility_pct": sum(webcam_values["face_visibility_pct"]) / len(webcam_values["face_visibility_pct"]) if webcam_values["face_visibility_pct"] else None,
-            "average_centered_frame_pct": sum(webcam_values["centered_frame_pct"]) / len(webcam_values["centered_frame_pct"]) if webcam_values["centered_frame_pct"] else None,
-            "average_head_movement_index": sum(webcam_values["head_movement_index"]) / len(webcam_values["head_movement_index"]) if webcam_values["head_movement_index"] else None,
-            "answers_with_metrics": camera_answers,
-        }
-    else:
-        summary["voice_summary"] = {"average_wpm": 0, "average_fillers": 0, "answers_with_speech": 0}
-        summary["webcam_summary"] = {
-            "average_face_visibility_pct": None,
-            "average_centered_frame_pct": None,
-            "average_head_movement_index": None,
-            "answers_with_metrics": 0,
-        }
+    question_scores = (score or {}).get("question_scores") or []
+    speech = [q.get("speech_analysis", {}) or {} for q in question_scores]
+    speech_with_words = [item for item in speech if item.get("word_count", 0) > 0]
+    wpms = [item.get("words_per_minute", 0) for item in speech_with_words if item.get("duration_seconds", 0) > 0]
+    fillers = [item.get("filler_count", 0) for item in speech_with_words]
+    summary["voice_summary"] = {
+        "average_wpm": sum(wpms) / len(wpms) if wpms else 0,
+        "average_fillers": sum(fillers) / len(fillers) if fillers else 0,
+        "answers_with_speech": len(speech_with_words),
+    }
+    summary["webcam_summary"] = summarize_webcam(question_scores)
 
     return summary

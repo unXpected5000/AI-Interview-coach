@@ -19,5 +19,16 @@ export async function onRequest({ request, env }) {
   const incoming = new URL(request.url);
   const upstreamUrl = new URL(`${incoming.pathname}${incoming.search}`, origin);
   const upstreamRequest = new Request(upstreamUrl, request);
-  return fetch(upstreamRequest);
+  try {
+    return await fetch(upstreamRequest);
+  } catch (error) {
+    // Keep origin transport failures distinguishable from application errors;
+    // do not forward exception details that could contain request data.
+    console.error("API origin fetch failed", {
+      host: origin.host,
+      path: incoming.pathname,
+      name: error instanceof Error ? error.name : "UnknownError",
+    });
+    return jsonResponse(502, "The API server did not return a response. It may be waking up or temporarily unavailable; retry shortly.");
+  }
 }

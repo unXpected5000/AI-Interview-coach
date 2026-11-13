@@ -117,7 +117,7 @@ def test_follow_up_fallback_is_specific_and_bounded():
 
 def test_report_does_not_claim_unmeasured_webcam_analysis_or_hiring_prediction():
     report = ReportService().generate_report({}, [], {"overall_score": 70})
-    assert "No webcam metrics were recorded" in report["Body Language"]
+    assert "No camera measurements were recorded" in report["Camera Signals"]
     assert "not a prediction of hiring outcomes" in report["Executive Summary"]
 
 

@@ -48,3 +48,18 @@ test("API proxy rejects non-HTTPS or path-bearing backend origins", async () => 
   assert.equal(response.status, 500);
   assert.match((await response.json()).detail, /HTTPS origin/);
 });
+
+test("API proxy returns a bounded diagnostic when the origin drops the request", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError("simulated origin disconnect"); };
+  try {
+    const response = await onRequest({
+      request: new Request("https://coach.pages.dev/api/health"),
+      env: { BACKEND_API_ORIGIN: "https://coach-api.onrender.com" },
+    });
+    assert.equal(response.status, 502);
+    assert.match((await response.json()).detail, /API server did not return a response/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

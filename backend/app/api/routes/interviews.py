@@ -2,7 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from app.api.deps import get_current_user, get_interview_service
+from app.api.deps import get_current_user, get_interview_service, get_profile_complete_user
+from app.core.rate_limit import INTERVIEW_ANSWER_USER, INTERVIEW_COMPLETE_USER, INTERVIEW_START_USER, enforce
 from app.schemas.interview_schema import (
     AnswerCreateRequest,
     AnswerResponse,
@@ -30,9 +31,10 @@ async def delete_interview(
 @router.post("/start", response_model=InterviewStartResponse, status_code=status.HTTP_201_CREATED)
 async def start_interview(
     payload: InterviewStartRequest,
-    current_user: Annotated[dict, Depends(get_current_user)],
+    current_user: Annotated[dict, Depends(get_profile_complete_user)],
     interview_service: Annotated[InterviewService, Depends(get_interview_service)],
 ) -> dict:
+    enforce(INTERVIEW_START_USER, current_user["id"])
     interview = await interview_service.start_interview(current_user["id"], payload.resume_id, payload.difficulty, payload.difficulty_mode)
     return {"interview": interview}
 
@@ -62,6 +64,7 @@ async def submit_answer(
     current_user: Annotated[dict, Depends(get_current_user)],
     interview_service: Annotated[InterviewService, Depends(get_interview_service)],
 ) -> dict:
+    enforce(INTERVIEW_ANSWER_USER, current_user["id"])
     return await interview_service.submit_answer(
         interview_id=interview_id,
         user_id=current_user["id"],
@@ -80,4 +83,5 @@ async def complete_interview(
     current_user: Annotated[dict, Depends(get_current_user)],
     interview_service: Annotated[InterviewService, Depends(get_interview_service)],
 ) -> dict:
+    enforce(INTERVIEW_COMPLETE_USER, current_user["id"])
     return await interview_service.complete_interview(interview_id, current_user["id"])

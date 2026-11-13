@@ -1,6 +1,7 @@
 import axios from "axios";
 
-import { getAccessToken } from "../utils/tokenStorage.js";
+import { handleUnauthorizedResponse } from "../auth/session.js";
+import { clearAccessToken, getAccessToken } from "../utils/tokenStorage.js";
 import { env } from "../utils/env.js";
 
 export const apiClient = axios.create({
@@ -24,3 +25,14 @@ apiClient.interceptors.request.use((config) => {
 
   return config;
 });
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    handleUnauthorizedResponse(error, {
+      clearToken: clearAccessToken,
+      dispatch: (name) => window.dispatchEvent(new Event(name)),
+    });
+    return Promise.reject(error);
+  },
+);

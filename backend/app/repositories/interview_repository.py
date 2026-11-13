@@ -34,12 +34,6 @@ class InterviewRepository:
     async def get_by_id_and_user(self, interview_id: str, user_id: str) -> dict[str, Any] | None:
         return await self.collection.find_one({"_id": to_object_id(interview_id), "user_id": user_id})
 
-    async def get_by_user_and_resume(self, user_id: str, resume_id: str) -> dict[str, Any] | None:
-        return await self.collection.find_one(
-            {"user_id": user_id, "resume_id": resume_id, "status": "active"},
-            sort=[("created_at", -1)],
-        )
-
     async def update_question(self, interview_id: str, user_id: str, question: dict[str, Any]) -> None:
         await self.collection.update_one(
             {
@@ -101,7 +95,21 @@ class InterviewRepository:
         return result.deleted_count == 1
 
     async def list_by_user(self, user_id: str) -> list[dict[str, Any]]:
-        cursor = self.collection.find({"user_id": user_id}).sort("created_at", -1)
+        # Dashboard summaries need only a small part of each interview. Fetch
+        # question IDs to compute the count instead of transferring every prompt
+        # and expected answer on every dashboard refresh.
+        cursor = self.collection.find(
+            {"user_id": user_id},
+            {
+                "resume_id": 1,
+                "skills": 1,
+                "status": 1,
+                "created_at": 1,
+                "completed_at": 1,
+                "difficulty": 1,
+                "questions.question_id": 1,
+            },
+        ).sort("created_at", -1)
         return await cursor.to_list(length=None)
 
     async def set_completed(self, interview_id: str) -> dict[str, Any] | None:
@@ -115,3 +123,28 @@ class InterviewRepository:
             },
         )
         return await self.collection.find_one({"_id": to_object_id(interview_id)})
+
+    async def list_active_by_user_and_resume(self, user_id: str, resume_id: str) -> list[dict[str, Any]]:
+        cursor = self.collection.find(
+            {"user_id": user_id, "resume_id": resume_id, "status": "active"},
+        ).sort("created_at", -1)
+        return await cursor.to_list(length=50)
+
+    async def list_progress_by_users(self, user_ids: list[str]) -> list[dict[str, Any]]:
+        """Interview metadata for staff progress summaries; excludes questions and answers."""
+        if not user_ids:
+            return []
+        cursor = self.collection.find(
+            {"user_id": {"$in": user_ids}},
+            {
+                "user_id": 1,
+                "status": 1,
+                "created_at": 1,
+                "completed_at": 1,
+                "difficulty.initial": 1,
+                "difficulty.current": 1,
+                "difficulty.mode": 1,
+                "questions.question_id": 1,
+            },
+        ).sort("created_at", -1)
+        return await cursor.to_list(length=None)

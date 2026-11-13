@@ -13,6 +13,12 @@ import FloatingWebcamPanel from "../components/interview/FloatingWebcamPanel.jsx
 import { startLocalSpeechCapture } from "../utils/localSpeechCapture.js";
 import { mergeSpeechTranscriptSegments, terminateLocalSpeechWorker, transcribeAudioBlob, transcribeAudioWindow, warmLocalSpeechModel } from "../utils/localSpeechTranscription.js";
 import { recordConsent } from "../api/accountApi.js";
+import { getErrorMessage } from "../utils/errorMessage.js";
+import ErrorPage from "../components/ui/ErrorPage.jsx";
+import { errorPageKindFor } from "../utils/errorPages.js";
+import { cameraMetricsPayload } from "../utils/mediapipeAnalyzer.js";
+import { bridgeBeforeQuestion, formatClock, shouldAutoFinish, speechWatchdogMs, turnLabel } from "../utils/liveCall.js";
+import CameraSignalsPanel, { CameraConsentPrompt } from "../components/interview/CameraSignalsPanel.jsx";
 
 function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -41,8 +47,13 @@ export default function LiveInterviewPage() {
   const [transcript, setTranscript] = useState("");
   const [draft, setDraft] = useState("");
   const [analysis, setAnalysis] = useState(null);
-  const [webcamMetrics, setWebcamMetrics] = useState({});
+  const [cameraSaveConsent, setCameraSaveConsent] = useState(false);
+  const [askingCameraConsent, setAskingCameraConsent] = useState(false);
+  const [handsFree, setHandsFree] = useState(false);
+  const [clock, setClock] = useState(() => Date.now());
+  const [responseGapMs, setResponseGapMs] = useState(null);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [speechMode, setSpeechMode] = useState("");
@@ -75,12 +86,33 @@ export default function LiveInterviewPage() {
   const speechGenerationRef = useRef(0);
   const speechPulseTimeoutRef = useRef(null);
   const interruptionTimeoutRef = useRef(null);
+  const speechWatchdogRef = useRef(null);
+  const lastSpeechActivityRef = useRef(0);
+  const callStartRef = useRef(0);
+  const turnCountRef = useRef(0);
+  const responseGapStartRef = useRef(0);
+  const submitAnswerRef = useRef(null);
   const { videoRef, error: cameraError } = useWebcam(callActive && cameraOn);
-  const { metrics, isReady: cameraAnalysisReady, error: cameraAnalysisError } = useMediaPipe(videoRef, callActive && cameraOn);
+  const currentQuestionId = questions[currentIndex]?.question_id ?? null;
+  const {
+    metrics: cameraMetrics,
+    isReady: cameraAnalysisReady,
+    error: cameraAnalysisError,
+    postureAvailable,
+    snapshot: cameraSnapshot,
+  } = useMediaPipe(videoRef, callActive && cameraOn, { segmentKey: currentQuestionId });
+
+  // Derived camera numbers for the current answer, only with explicit save consent.
+  function currentCameraPayload() {
+    if (!cameraOn || !cameraAnalysisReady || cameraError || !(videoRef.current?.readyState >= 2)) return {};
+    return cameraMetricsPayload(cameraSnapshot(), { consent: cameraSaveConsent });
+  }
 
   useEffect(() => {
-    if (callActive && cameraOn && cameraAnalysisReady && !cameraError) setWebcamMetrics(metrics);
-  }, [callActive, cameraOn, metrics, cameraAnalysisReady, cameraError]);
+    if (!callActive) return undefined;
+    const timer = window.setInterval(() => setClock(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [callActive]);
 
   useEffect(() => {
     let active = true;
@@ -95,7 +127,7 @@ export default function LiveInterviewPage() {
         const firstUnanswered = interview.questions.findIndex((question) => !answerMap[question.question_id]);
         setCurrentIndex(firstUnanswered >= 0 ? firstUnanswered : 0);
       })
-      .catch((requestError) => setError(requestError.response?.data?.detail ?? "Unable to load the interview."))
+      .catch((requestError) => { setLoadError(requestError); setError(getErrorMessage(requestError, "Unable to load the interview.")); })
       .finally(() => active && setIsLoading(false));
     return () => {
       active = false;
@@ -111,6 +143,7 @@ export default function LiveInterviewPage() {
       window.clearTimeout(recognitionRetryTimerRef.current);
       window.clearTimeout(interruptionTimeoutRef.current);
       window.clearTimeout(speechPulseTimeoutRef.current);
+      window.clearTimeout(speechWatchdogRef.current);
       speechGenerationRef.current += 1;
       window.speechSynthesis?.cancel();
     };
@@ -134,6 +167,7 @@ export default function LiveInterviewPage() {
   }
 
   const updateTranscript = useCallback((text) => {
+    if (text && text !== transcriptRef.current) lastSpeechActivityRef.current = Date.now();
     transcriptRef.current = text;
     setTranscript(text);
     if (!draftWasManuallyEditedRef.current) {
@@ -151,6 +185,7 @@ export default function LiveInterviewPage() {
       transcriptRef.current = "";
       timestampsRef.current = [];
       answerStartRef.current = Date.now();
+      lastSpeechActivityRef.current = 0;
       setTranscript("");
       setDraft("");
       draftRef.current = "";
@@ -427,7 +462,13 @@ export default function LiveInterviewPage() {
     utterance.pitch = 1.02;
     if (voiceRef.current) utterance.voice = voiceRef.current;
     utterance.onstart = () => {
-      if (generation === speechGenerationRef.current) setIsSpeaking(true);
+      if (generation !== speechGenerationRef.current) return;
+      setIsSpeaking(true);
+      if (responseGapStartRef.current) {
+        // Measured: time from submitting an answer to the interviewer starting to speak.
+        setResponseGapMs(Date.now() - responseGapStartRef.current);
+        responseGapStartRef.current = 0;
+      }
     };
     utterance.onboundary = (event) => {
       if (generation !== speechGenerationRef.current) return;
@@ -440,6 +481,8 @@ export default function LiveInterviewPage() {
     };
     const finishSpeaking = () => {
       if (generation !== speechGenerationRef.current) return;
+      window.clearTimeout(speechWatchdogRef.current);
+      speechWatchdogRef.current = null;
       window.clearTimeout(speechPulseTimeoutRef.current);
       speechPulseTimeoutRef.current = null;
       setSpeechActivity(0);
@@ -448,16 +491,25 @@ export default function LiveInterviewPage() {
     };
     utterance.onend = finishSpeaking;
     utterance.onerror = finishSpeaking;
+    // Some browsers drop onend for long utterances; never leave the call stuck.
+    window.clearTimeout(speechWatchdogRef.current);
+    speechWatchdogRef.current = window.setTimeout(() => {
+      if (generation !== speechGenerationRef.current) return;
+      synth.cancel();
+      finishSpeaking();
+    }, speechWatchdogMs(text, utterance.rate));
     synth.speak(utterance);
   }, []);
 
-  function askQuestion(question, first = false) {
+  function askQuestion(question, first = false, previousStatus = "answered") {
     if (!question) return;
     if (interactionMode === "text") {
       setIsSpeaking(false);
+      responseGapStartRef.current = 0;
       return;
     }
-    const leadIn = first ? "Hi, thanks for joining me. Take your time. " : "Thanks, that’s helpful. ";
+    turnCountRef.current += 1;
+    const leadIn = bridgeBeforeQuestion({ first, previousStatus, isFollowUp: question.follow_up_for != null, turn: turnCountRef.current });
     speak(`${leadIn}${question.question}`, () => listen(true));
   }
 
@@ -471,11 +523,12 @@ export default function LiveInterviewPage() {
         await completeInterview(interviewId);
         navigate(`/interviews/${interviewId}/results`, { replace: true });
       } catch (requestError) {
-        setError(requestError.response?.data?.detail ?? "Could not prepare the interview report.");
+        setError(getErrorMessage(requestError, "Could not prepare the interview report."));
       }
       return;
     }
     setCallActive(true);
+    callStartRef.current = Date.now();
     setMicrophoneState(interactionMode === "voice" ? "starting" : "text_mode");
     if (interactionMode === "voice" && speechSupported) {
       setError("Checking for on-device speech recognition…");
@@ -625,6 +678,7 @@ export default function LiveInterviewPage() {
   async function handleSubmitAnswer() {
     if (!currentQuestion || isSaving) return;
     setIsSaving(true);
+    responseGapStartRef.current = Date.now();
     try {
       let captured = await stopRecognitionAndWait();
       captured = await getFinalAnswerTranscript(captured);
@@ -640,7 +694,7 @@ export default function LiveInterviewPage() {
       const saved = await submitAnswer(interviewId, currentQuestion.question_id, spokenAnswer, {
         transcript: isSpokenAnswer ? captured : undefined,
         speech_analysis: speechAnalysis,
-        webcam_metrics: cameraOn && cameraAnalysisReady && !cameraError && webcamMetrics.sample_count > 0 && videoRef.current?.readyState >= 2 ? webcamMetrics : {},
+        webcam_metrics: currentCameraPayload(),
         answer_status: interruptedQuestionRef.current === currentQuestion.question_id ? "interrupted" : "answered",
       });
       setAnswers((current) => ({ ...current, [currentQuestion.question_id]: saved }));
@@ -660,7 +714,7 @@ export default function LiveInterviewPage() {
         setDraft("");
         draftRef.current = "";
         setTranscript("");
-        await wait(900);
+        await wait(350);
         askQuestion(nextQuestion);
       } else {
         await completeInterview(interviewId);
@@ -668,7 +722,7 @@ export default function LiveInterviewPage() {
         navigate(`/interviews/${interviewId}/results`, { replace: true });
       }
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Could not save this answer. Please try again.");
+      setError(getErrorMessage(requestError, "Could not save this answer. Please try again."));
     } finally {
       setIsSaving(false);
     }
@@ -691,7 +745,7 @@ export default function LiveInterviewPage() {
         const saved = await submitAnswer(interviewId, currentQuestion.question_id, unsavedAnswer, {
           transcript: isSpokenAnswer ? captured : undefined,
           speech_analysis: speechAnalysis,
-          webcam_metrics: cameraOn && cameraAnalysisReady && !cameraError && webcamMetrics.sample_count > 0 && videoRef.current?.readyState >= 2 ? webcamMetrics : {},
+          webcam_metrics: currentCameraPayload(),
           answer_status: interruptedQuestionRef.current === currentQuestion.question_id ? "interrupted" : "partial",
         });
         setAnswers((current) => ({ ...current, [currentQuestion.question_id]: saved }));
@@ -699,7 +753,7 @@ export default function LiveInterviewPage() {
       await completeInterview(interviewId);
       navigate(`/interviews/${interviewId}/results`, { replace: true });
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Could not finish the interview report.");
+      setError(getErrorMessage(requestError, "Could not finish the interview report."));
     } finally {
       setCallActive(false);
       setIsSpeaking(false);
@@ -732,22 +786,34 @@ export default function LiveInterviewPage() {
         draftRef.current = "";
         setTranscript("");
         await wait(300);
-        askQuestion(nextQuestion);
+        responseGapStartRef.current = Date.now();
+        askQuestion(nextQuestion, false, "skipped");
       } else {
         await completeInterview(interviewId);
         setCallActive(false);
         navigate(`/interviews/${interviewId}/results`, { replace: true });
       }
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Could not mark this question as skipped. Your interview is still open.");
+      setError(getErrorMessage(requestError, "Could not mark this question as skipped. Your interview is still open."));
     } finally {
       setIsSaving(false);
     }
   }
 
   function toggleCamera() {
-    setCameraOn((value) => !value);
-    if (cameraOn) setWebcamMetrics({});
+    if (cameraOn) {
+      setCameraOn(false);
+      setCameraSaveConsent(false);
+      return;
+    }
+    setAskingCameraConsent(true);
+  }
+
+  function chooseCameraConsent(save) {
+    setCameraSaveConsent(save);
+    setAskingCameraConsent(false);
+    setCameraOn(true);
+    recordConsent("camera_processing", save ? "accepted" : "rejected").catch(() => {});
   }
 
   function toggleMicrophone() {
@@ -812,15 +878,38 @@ export default function LiveInterviewPage() {
     return () => window.speechSynthesis?.removeEventListener?.("voiceschanged", chooseVoice);
   }, []);
 
+  submitAnswerRef.current = handleSubmitAnswer;
+  useEffect(() => {
+    if (!handsFree || !callActive || interactionMode !== "voice") return undefined;
+    const timer = window.setInterval(() => {
+      const words = transcriptRef.current.trim().split(/\s+/).filter(Boolean).length;
+      if (shouldAutoFinish({
+        enabled: handsFree,
+        listening: isListening && !isSpeaking,
+        busy: isSaving || draftWasManuallyEditedRef.current,
+        lastSpeechAt: lastSpeechActivityRef.current,
+        now: Date.now(),
+        wordCount: words,
+      })) {
+        lastSpeechActivityRef.current = 0;
+        void submitAnswerRef.current?.();
+      }
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [handsFree, callActive, interactionMode, isListening, isSpeaking, isSaving]);
+
   const visibleAnalysis = analysis ?? buildSpeechAnalysis(draft, 0, []);
+  const turn = turnLabel({ callActive, isSpeaking, isListening, isSaving, microphoneState, interactionMode });
+  const callSeconds = callActive && callStartRef.current ? (clock - callStartRef.current) / 1000 : 0;
+  const answerSeconds = callActive && isListening && answerStartRef.current ? (clock - answerStartRef.current) / 1000 : 0;
 
   if (isLoading) return <div className="rounded-xl bg-white p-6 text-sm text-stone-600">Setting up your interview room…</div>;
-  if (!session) return <div className="rounded-xl bg-white p-6 text-sm text-rose-700">{error || "Interview not found."}</div>;
+  if (!session) return <ErrorPage detail={error} kind={errorPageKindFor(loadError) ?? "404"} onRetry={() => window.location.reload()} />;
 
   return (
     <section className="animate-rise">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-xs font-black uppercase tracking-[0.2em] text-teal-700">Live interview room</p><h1 className="mt-1 text-3xl font-black">AI interview call</h1><p className="mt-2 text-sm text-stone-600">Spoken questions, live speech-to-text, and coaching analysis after each answer.</p></div>
+        <div><p className="text-xs font-black uppercase tracking-[0.2em] text-teal-700">Live interview room</p><h1 className="mt-1 text-3xl font-black">AI interview call</h1><p className="mt-2 text-sm text-stone-600">Spoken questions with browser text-to-speech, live speech-to-text, and scoring after each answer. You finish each answer with a click, or turn on hands-free mode to finish after a pause.</p></div>
         <div className="rounded-full bg-white px-4 py-2 text-xs font-bold text-stone-600 shadow-sm">{completedCount}/{questions.length} answered · {progress}%</div>
       </div>
       {error ? <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{error}</div> : null}
@@ -828,9 +917,10 @@ export default function LiveInterviewPage() {
       <div className="grid gap-5 xl:grid-cols-[1.5fr_0.75fr]">
         <section className="overflow-hidden rounded-2xl bg-[#151719] p-4 text-white shadow-xl sm:p-6">
           <div className="relative min-h-[460px] overflow-hidden rounded-xl bg-gradient-to-br from-slate-800 via-slate-900 to-teal-950">
-            <div className="absolute left-4 top-4 z-40 flex flex-wrap items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white backdrop-blur"><span className={`size-2 rounded-full ${callActive ? isListening ? "bg-emerald-400" : "bg-amber-300" : "bg-stone-400"}`} />{callActive ? isSpeaking ? "Interviewer speaking" : isListening ? microphoneState === "speech_detected" ? "Speech detected" : "Listening for speech" : "Interview active" : "Ready to join"}<span aria-label="Interview difficulty setting" className="border-l border-white/30 pl-2">{String(session?.difficulty?.initial ?? "medium").replaceAll("_", " ").toUpperCase()} · {session?.difficulty?.mode ?? "adaptive"}</span></div>
+            <div className="absolute left-4 top-4 z-40 flex flex-wrap items-center gap-2 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white backdrop-blur"><span className={`size-2 rounded-full ${turn.tone === "you" ? "animate-pulse bg-emerald-400" : turn.tone === "interviewer" ? "bg-sky-300" : turn.tone === "thinking" ? "animate-pulse bg-amber-300" : "bg-stone-400"}`} /><span aria-live="polite">{turn.text}</span>{callActive ? <span className="border-l border-white/30 pl-2 font-mono" title="Call time">{formatClock(callSeconds)}</span> : null}{answerSeconds > 0 ? <span className="font-mono text-emerald-200" title="Current answer length">answer {formatClock(answerSeconds)}</span> : null}{responseGapMs !== null ? <span className="text-slate-300" title="Measured time from submitting your answer to the interviewer starting the next question">response gap {(responseGapMs / 1000).toFixed(1)} s</span> : null}<span aria-label="Interview difficulty setting" className="border-l border-white/30 pl-2">{String(session?.difficulty?.initial ?? "medium").replaceAll("_", " ").toUpperCase()} · {session?.difficulty?.mode ?? "adaptive"}</span></div>
             <div className={`interviewer-stage-avatar${cameraOn ? " interviewer-stage-avatar--camera" : ""}`}><InterviewerAvatar state={avatarState} speechActivity={speechActivity} hasSpeechBoundaryEvents={hasSpeechBoundaryEvents} /></div>
             {callActive && cameraOn ? <FloatingWebcamPanel videoRef={videoRef} cameraError={cameraError} onClose={toggleCamera} /> : null}
+            {askingCameraConsent ? <div className="absolute right-4 top-16 z-50 max-w-sm"><CameraConsentPrompt dark onCancel={() => setAskingCameraConsent(false)} onChoose={chooseCameraConsent} /></div> : null}
             {callActive && cameraOn && cameraAnalysisError && !cameraError ? <div className="absolute bottom-28 left-4 z-20 max-w-[45%] rounded-lg bg-amber-200 px-3 py-2 text-xs font-semibold text-amber-950">{cameraAnalysisError}</div> : null}
             <div className="absolute bottom-4 left-4 right-4 z-20 max-h-28 overflow-auto rounded-xl bg-black/65 p-4 pr-5 backdrop-blur sm:left-1/2 sm:right-auto sm:w-[min(70%,680px)] sm:-translate-x-1/2"><p className="text-[10px] font-bold uppercase tracking-widest text-teal-200">{currentQuestion ? `${currentQuestion.skill} · ${currentQuestion.difficulty}` : "Interview complete"}</p><p className="mt-1 text-sm font-semibold leading-5 sm:text-base sm:leading-6">{currentQuestion?.question ?? "Your report is ready."}</p></div>
           </div>
@@ -848,6 +938,7 @@ export default function LiveInterviewPage() {
             </> : <>
               {interactionMode === "text" && !audioDisclosureAccepted ? <label className="basis-full rounded-lg border border-white/20 bg-black/25 p-3 text-left text-xs leading-5 text-slate-200"><input checked={audioDisclosureAccepted} className="mr-2 align-middle" onChange={(event) => { setAudioDisclosureAccepted(event.target.checked); recordConsent("microphone_processing", event.target.checked ? "accepted" : "withdrawn").catch(() => {}); }} type="checkbox" />Before switching to voice: browser speech recognition may transmit audio to its provider. The local Whisper fallback transcribes on-device and only the transcript is saved.</label> : null}
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20" onClick={toggleCamera} type="button">{cameraOn ? "Turn camera off" : "Turn camera on"}</button>
+              {interactionMode === "voice" ? <label className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold" title="Submits your answer after about 4 seconds of silence once you have said at least 8 words"><input checked={handsFree} onChange={(event) => setHandsFree(event.target.checked)} type="checkbox" />Hands-free</label> : null}
               <button className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={isSaving} onClick={() => changeInteractionMode(interactionMode === "voice" ? "text" : "voice")} type="button">Switch to {interactionMode === "voice" ? "text" : "voice"}</button>
               {interactionMode === "voice" ? <button aria-label={micMuted ? "Unmute microphone" : "Mute microphone"} className="rounded-full border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold hover:bg-white/20 disabled:cursor-wait disabled:opacity-60" disabled={isSaving} onClick={toggleMicrophone} type="button">{micMuted ? "Unmute mic" : "Mute mic"}</button> : null}
               {interactionMode === "voice" ? <button className="rounded-full border border-amber-300 bg-amber-950/40 px-4 py-3 text-sm font-bold text-amber-100 hover:bg-amber-900/60" onClick={withdrawAudioAuthorization} type="button">Stop voice processing</button> : null}
@@ -879,7 +970,7 @@ export default function LiveInterviewPage() {
           <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <h2 className="font-bold">Answer signals</h2><p className="mt-1 text-xs text-stone-500">Updates from the live transcript; final scoring is saved after submission.</p>
             <div className="mt-4 grid grid-cols-2 gap-3">{[["Words", visibleAnalysis.word_count], ["Fillers", visibleAnalysis.filler_count], ["Pace", `${Math.round(visibleAnalysis.words_per_minute)} WPM`], ["Pauses", visibleAnalysis.pause_count]].map(([label, value]) => <div className="rounded-lg bg-stone-50 p-3" key={label}><p className="text-[10px] font-bold uppercase tracking-wider text-stone-500">{label}</p><p className="mt-1 text-xl font-black text-stone-900">{value}</p></div>)}</div>
-            {cameraOn ? <><p className="mt-4 text-xs font-semibold text-stone-600">Camera estimates (local, approximate)</p><div className="mt-2 grid grid-cols-3 gap-2 text-center">{[["Face visible", `${webcamMetrics.face_visibility_pct ?? 0}%`], ["In frame", `${webcamMetrics.centered_frame_pct ?? 0}%`], ["Movement", webcamMetrics.head_movement_index ?? 0]].map(([label, value]) => <div className="rounded-lg bg-stone-50 p-2" key={label}><p className="text-[10px] text-stone-500">{label}</p><p className="mt-1 text-sm font-bold">{value}</p></div>)}</div><p className="mt-2 text-[10px] leading-4 text-stone-400">These describe face tracking and framing only; they do not measure confidence, emotion, or interview performance.</p></> : null}
+            {cameraOn ? <div className="mt-4"><p className="mb-2 text-xs font-semibold text-stone-600">Camera estimates for this answer (local, approximate)</p>{cameraAnalysisReady ? <CameraSignalsPanel consent={cameraSaveConsent} metrics={cameraMetrics} postureAvailable={postureAvailable} /> : <p className="text-xs text-stone-500">{cameraAnalysisError || "Loading the local face model…"}</p>}</div> : null}
           </section>
           <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 className="font-bold">Interview progress</h2><div className="mt-3 h-2 overflow-hidden rounded-full bg-stone-100"><div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${progress}%` }} /></div><p className="mt-2 text-xs text-stone-500">Question {Math.min(currentIndex + 1, questions.length)} of {questions.length}. Answers are analyzed by the same service used in practice mode.</p></section>
         </aside>

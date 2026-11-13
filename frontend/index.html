@@ -2,12 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Practice job interviews from your resume with spoken or typed answers, coaching scores, and reports." />
+    <meta name="theme-color" content="#f6f3ee" />
+    <meta name="color-scheme" content="light dark" />
     <title>AI Interview Coach</title>
+    <script>
+      // Apply the saved or device theme before first paint to avoid a light flash.
+      (function () {
+        var preference = "system";
+        try {
+          var saved = localStorage.getItem("ai-interview-coach-theme-preference");
+          if (saved === "light" || saved === "dark" || saved === "system") preference = saved;
+          else if (localStorage.getItem("ai-interview-coach-theme") === "dark") preference = "dark";
+        } catch (error) {}
+        var dark = preference === "dark" || (preference === "system" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        var theme = dark ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", dark ? "#171b20" : "#f6f3ee");
+      })();
+    </script>
   </head>
   <body>
+    <noscript>
+      <div style="font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 1.5rem; line-height: 1.5;">
+        <h1 style="font-size: 1.25rem;">JavaScript is required</h1>
+        <p>AI Interview Coach runs in your browser. Enable JavaScript, then reload this page.</p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
-

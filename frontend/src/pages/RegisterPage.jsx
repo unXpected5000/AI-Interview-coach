@@ -3,12 +3,16 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import GoogleSignInButton from "../components/auth/GoogleSignInButton.jsx";
+import ProfileFields, { profilePayload, useProfileOptions } from "../components/auth/ProfileFields.jsx";
 import { recordConsent } from "../api/accountApi.js";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 export default function RegisterPage() {
   const navigate = useNavigate();
   const { register, loginWithGoogle } = useAuth();
+  const { options, error: optionsError } = useProfileOptions();
   const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [profile, setProfile] = useState({ department: "", year: "", phone: "" });
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -26,13 +30,11 @@ export default function RegisterPage() {
     setIsSubmitting(true);
 
     try {
-      await register(form);
-      await recordConsent("terms_acknowledgement", "accepted").catch(() => {});
-      navigate("/dashboard", { replace: true });
+      const result = await register({ ...form, ...profilePayload(profile) });
+      // No session exists until the emailed code is verified.
+      navigate("/verify-email", { state: { email: form.email, notice: result.message } });
     } catch (requestError) {
-      setError(
-        requestError.response?.data?.detail ?? "Registration failed. Try again.",
-      );
+      setError(getErrorMessage(requestError, "Registration failed. Try again."));
     } finally {
       setIsSubmitting(false);
     }
@@ -42,11 +44,11 @@ export default function RegisterPage() {
     setError("");
     setIsSubmitting(true);
     try {
-      await loginWithGoogle(credential);
+      const user = await loginWithGoogle(credential);
       await recordConsent("terms_acknowledgement", "accepted").catch(() => {});
-      navigate("/dashboard", { replace: true });
+      navigate(user.profile_complete ? "/dashboard" : "/complete-profile", { replace: true });
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Google sign-in failed. Please try again.");
+      setError(getErrorMessage(requestError, "Google sign-in failed. Please try again."));
     } finally {
       setIsSubmitting(false);
     }
@@ -55,6 +57,7 @@ export default function RegisterPage() {
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
       <h1 className="text-2xl font-semibold text-gray-950">Register</h1>
+      <p className="mt-2 text-sm text-gray-600">New accounts are student accounts. We email a 6-digit code to confirm the address before you can sign in.</p>
       <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
         <label className="block">
           <span className="text-sm font-medium text-gray-700">Name</span>
@@ -69,8 +72,6 @@ export default function RegisterPage() {
             onChange={updateField}
           />
         </label>
-
-        <label className="flex items-start gap-2 text-xs leading-5 text-gray-700"><input checked={termsAccepted} className="mt-1" onChange={(event) => setTermsAccepted(event.target.checked)} type="checkbox" /><span>I agree to the <Link className="underline" to="/legal/terms">Terms of Service</Link> and acknowledge the <Link className="underline" to="/legal/privacy">Privacy Policy</Link>. No marketing consent is requested.</span></label>
 
         <label className="block">
           <span className="text-sm font-medium text-gray-700">Email</span>
@@ -99,7 +100,12 @@ export default function RegisterPage() {
           />
         </label>
 
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        <ProfileFields onChange={setProfile} options={options} value={profile} />
+        {optionsError ? <p className="text-sm text-amber-700">{optionsError}</p> : null}
+
+        <label className="flex items-start gap-2 text-xs leading-5 text-gray-700"><input checked={termsAccepted} className="mt-1" onChange={(event) => setTermsAccepted(event.target.checked)} type="checkbox" /><span>I agree to the <Link className="underline" to="/legal/terms">Terms of Service</Link> and acknowledge the <Link className="underline" to="/legal/privacy">Privacy Policy</Link>. No marketing consent is requested.</span></label>
+
+        {error ? <p className="text-sm text-red-600" role="alert">{error}</p> : null}
 
         <button
           className="w-full rounded-md bg-gray-950 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-gray-400"
@@ -112,6 +118,7 @@ export default function RegisterPage() {
 
       <div className="my-5 flex items-center gap-3 text-xs text-gray-500"><span className="h-px flex-1 bg-gray-200" />or continue with<span className="h-px flex-1 bg-gray-200" /></div>
       <GoogleSignInButton disabled={isSubmitting || !termsAccepted} onCredential={handleGoogleCredential} />
+      <p className="mt-2 text-xs text-gray-500">With Google, you will add your department and year after signing in.</p>
 
       <p className="mt-4 text-sm text-gray-600">
         Already have an account?{" "}

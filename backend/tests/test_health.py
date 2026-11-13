@@ -12,13 +12,38 @@ def test_health_route_is_mounted_and_returns_ok() -> None:
         if f"{included.include_context.prefix}{route.path}" == "/api/health"
     )
     assert "GET" in route.methods
-    result = health_check()
-    try:
-        result.send(None)
-    except StopIteration as completed:
-        assert completed.value == {"status": "ok"}
-    else:
-        raise AssertionError("Health check unexpectedly performed asynchronous I/O")
+
+
+def test_health_reports_ok_only_when_database_responds(monkeypatch) -> None:
+    import asyncio
+    import json
+
+    from app.api.routes import health
+
+    async def ok():
+        return "ok"
+
+    async def unreachable():
+        return "unreachable"
+
+    monkeypatch.setattr(health, "ping_database", ok)
+    response = asyncio.run(health_check())
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"status": "ok", "database": "ok"}
+
+    monkeypatch.setattr(health, "ping_database", unreachable)
+    response = asyncio.run(health_check())
+    assert response.status_code == 503
+    assert json.loads(response.body)["database"] == "unreachable"
+
+
+def test_ping_database_reports_not_configured_without_client(monkeypatch) -> None:
+    import asyncio
+
+    from app.db import mongodb
+
+    monkeypatch.setattr(mongodb, "mongo_client", None)
+    assert asyncio.run(mongodb.ping_database()) == "not_configured"
 
 
 def test_http_400_logging_identifies_route_without_logging_request_data(caplog) -> None:

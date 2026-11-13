@@ -18,17 +18,3 @@ class ResumeUploadResponse(ResumeResponse):
 
 class ResumeListResponse(BaseModel):
     resumes: list[ResumeResponse]
-
-
-class RecommendedRole(BaseModel):
-    role: str
-    match_score: float
-    why_it_fits: str
-    evidence_used: list[str]
-    missing_skills: list[str]
-    learning_roadmap: list[str]
-
-
-class RoleRecommendationResponse(BaseModel):
-    resume_id: str
-    roles: list[RecommendedRole]

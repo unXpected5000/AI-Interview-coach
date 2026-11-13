@@ -57,6 +57,7 @@ class EvaluationService:
         return {
             "score": final_score,
             "semantic_score": round(semantic_similarity * 100, 2),
+            "similarity_method": "lexical_word_phrase_overlap",
             "completeness_score": round(completeness_ratio * 100, 2),
             "relevance_score": round(relevance_similarity * 100, 2),
             "keyword_coverage": round(keyword_coverage * 100, 2),
@@ -136,6 +137,7 @@ class EvaluationService:
                     "topic_focus": question.get("topic_focus", question.get("skill", "General")),
                     "score": round(final_score, 2),
                     "semantic_score": self._bounded_score(evaluation.get("semantic_score", answer.get("semantic_score", 0.0))),
+                    "similarity_method": evaluation.get("similarity_method", "legacy_embedding_or_unknown"),
                     "completeness_score": self._bounded_score(evaluation.get("completeness_score", answer.get("completeness_score", 0.0))),
                     "relevance_score": self._bounded_score(evaluation.get("relevance_score", answer.get("relevance_score", 0.0))),
                     "keyword_coverage": self._bounded_score(evaluation.get("keyword_coverage", 0)),

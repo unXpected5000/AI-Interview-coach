@@ -6,6 +6,7 @@ import { listResumes } from "../api/resumeApi.js";
 import DonutScore from "../components/ui/DonutScore.jsx";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 function formatDate(value) {
   if (!value) {
@@ -43,7 +44,7 @@ export default function DashboardPage() {
         setInterviews(interviewData.interviews ?? []);
       } catch (requestError) {
         if (active) {
-          setError(requestError.response?.data?.detail ?? "Unable to load dashboard data.");
+          setError(getErrorMessage(requestError, "Unable to load dashboard data."));
         }
       } finally {
         if (active) {

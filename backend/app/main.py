@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.auth import router as auth_router
@@ -11,8 +12,10 @@ from app.api.routes.health import router as health_router
 from app.api.routes.interviews import router as interviews_router
 from app.api.routes.resume_optimizer import router as resume_optimizer_router
 from app.api.routes.resumes import router as resumes_router
+from app.api.routes.users import router as users_router
+from app.api.deps import get_llm_client
 from app.core.config import settings
-from app.db.mongodb import close_mongo_connection, connect_to_mongo
+from app.db.mongodb import DatabaseUnavailableError, close_mongo_connection, connect_to_mongo
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +24,17 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
     yield
+    await get_llm_client().close()
+    get_llm_client.cache_clear()
     await close_mongo_connection()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+
+@app.exception_handler(DatabaseUnavailableError)
+async def database_unavailable_handler(_request: Request, _exc: DatabaseUnavailableError) -> JSONResponse:
+    return JSONResponse({"detail": "The database is not available. Try again shortly."}, status_code=503)
 
 
 @app.middleware("http")
@@ -56,3 +66,4 @@ app.include_router(resumes_router, prefix=settings.api_prefix)
 app.include_router(interviews_router, prefix=settings.api_prefix)
 app.include_router(export_router, prefix=settings.api_prefix)
 app.include_router(resume_optimizer_router, prefix=settings.api_prefix)
+app.include_router(users_router, prefix=settings.api_prefix)

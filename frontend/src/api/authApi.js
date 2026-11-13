@@ -19,3 +19,13 @@ export async function getCurrentUser() {
   const response = await apiClient.get("/auth/me");
   return response.data;
 }
+
+export async function verifyEmail(payload) {
+  const response = await apiClient.post("/auth/verify-email", payload);
+  return response.data;
+}
+
+export async function resendVerification(email) {
+  const response = await apiClient.post("/auth/resend-verification", { email });
+  return response.data;
+}

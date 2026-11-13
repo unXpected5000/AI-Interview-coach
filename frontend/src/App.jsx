@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import ProtectedRoute from "./auth/ProtectedRoute.jsx";
 import PublicOnlyRoute from "./auth/PublicOnlyRoute.jsx";
@@ -17,10 +17,19 @@ import LiveInterviewPage from "./pages/LiveInterviewPage.jsx";
 import AccountPage from "./pages/AccountPage.jsx";
 import LegalPage from "./pages/LegalPage.jsx";
 import CookieConsent from "./components/ui/CookieConsent.jsx";
+import RoleRoute from "./auth/RoleRoute.jsx";
+import ErrorBoundary from "./components/ui/ErrorBoundary.jsx";
+import ErrorPage from "./components/ui/ErrorPage.jsx";
+import OfflineBanner from "./components/ui/OfflineBanner.jsx";
+import VerifyEmailPage from "./pages/VerifyEmailPage.jsx";
+import CompleteProfilePage from "./pages/CompleteProfilePage.jsx";
+import DepartmentPage from "./pages/DepartmentPage.jsx";
+import AdminUsersPage from "./pages/AdminUsersPage.jsx";
 
 export default function App() {
+  const location = useLocation();
   return (
-    <><CookieConsent /><Routes>
+    <ErrorBoundary fullScreen resetKey={location.pathname}><OfflineBanner /><CookieConsent /><Routes>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="/legal/:kind" element={<LegalPage />} />
 
@@ -28,6 +37,7 @@ export default function App() {
         <Route element={<PublicLayout />}>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
         </Route>
       </Route>
 
@@ -35,6 +45,13 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route path="/complete-profile" element={<CompleteProfilePage />} />
+          <Route element={<RoleRoute roles={["department_faculty"]} />}>
+            <Route path="/department" element={<DepartmentPage />} />
+          </Route>
+          <Route element={<RoleRoute roles={["operator"]} />}>
+            <Route path="/admin/users" element={<AdminUsersPage />} />
+          </Route>
           <Route path="/resumes/upload" element={<ResumeUploadPage />} />
           <Route path="/resume-builder" element={<ResumeBuilderPage />} />
           <Route path="/interviews/start" element={<InterviewStartPage />} />
@@ -46,7 +63,7 @@ export default function App() {
         </Route>
       </Route>
 
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
-    </Routes></>
+      <Route path="*" element={<ErrorPage fullScreen kind="404" />} />
+    </Routes></ErrorBoundary>
   );
 }

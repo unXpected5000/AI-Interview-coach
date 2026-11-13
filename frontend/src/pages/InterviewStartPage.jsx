@@ -5,6 +5,7 @@ import { startInterview } from "../api/interviewApi.js";
 import { listResumes } from "../api/resumeApi.js";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import { recordConsent } from "../api/accountApi.js";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 function formatUploadedAt(value) {
   if (!value) {
@@ -45,7 +46,7 @@ export default function InterviewStartPage() {
       } catch (requestError) {
         if (active) {
           setError(
-            requestError.response?.data?.detail ?? "Unable to load resumes.",
+            getErrorMessage(requestError, "Unable to load resumes."),
           );
         }
       } finally {
@@ -71,7 +72,7 @@ export default function InterviewStartPage() {
       navigate(mode === "live" ? `/interviews/${data.interview.id}/live` : `/interviews/${data.interview.id}`);
     } catch (requestError) {
       setError(
-        requestError.response?.data?.detail ?? "Unable to start interview.",
+        getErrorMessage(requestError, "Unable to start interview."),
       );
     } finally {
       setStartingResumeId("");

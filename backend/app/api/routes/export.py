@@ -1,6 +1,8 @@
 """Downloadable interview report, data, and transcript exports."""
 from __future__ import annotations
 
+import asyncio
+import html
 import io
 import json
 from datetime import datetime
@@ -16,22 +18,31 @@ from app.services.interview_service import InterviewService
 router = APIRouter(prefix="/interviews", tags=["exports"])
 
 
-def _wrap_line(text: str, width: float, font: str, size: float) -> list[str]:
-    words = text.split()
-    if not words:
-        return [""]
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = f"{current} {word}".strip()
-        if current and fitz.get_text_length(candidate, fontname=font, fontsize=size) > width:
-            lines.append(current)
-            current = word
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return lines
+def _render_pdf(lines: list[tuple[str, str]]) -> bytes:
+    """Render report lines with PyMuPDF's HTML story so Unicode text is preserved.
+
+    MuPDF selects fallback fonts for scripts the base font lacks (for example CJK,
+    Cyrillic, Devanagari); earlier exports replaced such characters with "?".
+    """
+    tags = {"h1": "h1", "h2": "h2", "body": "p"}
+    body = "".join(f"<{tags[kind]}>{html.escape(text)}</{tags[kind]}>" for kind, text in lines)
+    css = (
+        "body{font-family:sans-serif;font-size:10pt;line-height:1.35}"
+        "h1{font-size:18pt;margin:0 0 8pt 0}h2{font-size:12pt;margin:10pt 0 4pt 0}p{margin:0 0 4pt 0}"
+    )
+    buffer = io.BytesIO()
+    writer = fitz.DocumentWriter(buffer)
+    story = fitz.Story(html=f"<body>{body}</body>", user_css=css)
+    mediabox = fitz.paper_rect("a4")
+    content_area = mediabox + (54, 54, -54, -54)
+    more = 1
+    while more:
+        device = writer.begin_page(mediabox)
+        more, _ = story.place(content_area)
+        story.draw(device)
+        writer.end_page()
+    writer.close()
+    return buffer.getvalue()
 
 
 def _report_pdf(data: dict) -> bytes:
@@ -71,25 +82,7 @@ def _report_pdf(data: dict) -> bytes:
             if item.get("answer_status") == "evaluation_failed":
                 lines.append(("body", "Evaluation unavailable; excluded from the performance denominator."))
 
-    document = fitz.open()
-    page = document.new_page(width=fitz.paper_size("a4")[0], height=fitz.paper_size("a4")[1])
-    margin = 54
-    y = margin
-    fonts = {"h1": (18, "hebo", 12), "h2": (12, "hebo", 7), "body": (10, "helv", 5)}
-    for kind, text in lines:
-        size, font, gap = fonts[kind]
-        safe_text = text.encode("latin-1", "replace").decode("latin-1")
-        for wrapped in _wrap_line(safe_text, page.rect.width - 2 * margin, font, size):
-            if y + size * 1.5 > page.rect.height - margin:
-                page = document.new_page(width=fitz.paper_size("a4")[0], height=fitz.paper_size("a4")[1])
-                y = margin
-            page.insert_text((margin, y + size), wrapped, fontname=font, fontsize=size)
-            y += size * 1.4
-        y += gap
-    try:
-        return document.tobytes()
-    finally:
-        document.close()
+    return _render_pdf(lines)
 
 
 async def _get_owned_interview(
@@ -111,7 +104,7 @@ async def export_pdf(
         from fastapi import HTTPException, status
 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Complete the interview before exporting a report.")
-    payload = _report_pdf(data)
+    payload = await asyncio.to_thread(_report_pdf, data)
     return StreamingResponse(
         io.BytesIO(payload),
         media_type="application/pdf",
