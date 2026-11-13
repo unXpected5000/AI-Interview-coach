@@ -1,17 +1,20 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MediaPipeAnalyzer } from "../utils/mediapipeAnalyzer.js";
 
-export function useMediaPipe(videoRef, isActive = true) {
-  const [metrics, setMetrics] = useState({
-    face_visibility_pct: 0,
-    centered_frame_pct: 0,
-    head_movement_index: 0,
-    sample_count: 0,
-    coachingSuggestions: [],
-  });
+const UI_UPDATE_INTERVAL_MS = 500;
+
+/**
+ * Runs local face/pose analysis while `isActive`. `segmentKey` (for example the
+ * current question id) starts a fresh measurement window when it changes.
+ * Inference stops as soon as `isActive` turns false or the component unmounts.
+ */
+export function useMediaPipe(videoRef, isActive = true, { segmentKey = null, withPose = true } = {}) {
+  const [metrics, setMetrics] = useState(() => new MediaPipeAnalyzer().metrics);
   const [isReady, setIsReady] = useState(false);
+  const [postureAvailable, setPostureAvailable] = useState(false);
   const [error, setError] = useState("");
   const analyzerRef = useRef(null);
+  const lastUiUpdateRef = useRef(0);
 
   useEffect(() => {
     if (!isActive) {
@@ -20,54 +23,60 @@ export function useMediaPipe(videoRef, isActive = true) {
       return undefined;
     }
     let isMounted = true;
-    const init = async () => {
-      setError("");
-      const analyzer = new MediaPipeAnalyzer();
-      analyzerRef.current = analyzer;
-      const success = await analyzer.initialize();
-      if (success && isMounted) {
-        setIsReady(true);
-      } else if (isMounted) {
-        setError("Local face tracking could not load. Camera preview remains available.");
-      } else if (!isMounted) {
+    const analyzer = new MediaPipeAnalyzer();
+    analyzerRef.current = analyzer;
+    setError("");
+    analyzer.initialize({ withPose }).then((success) => {
+      if (!isMounted) {
         analyzer.stop();
+        return;
       }
-    };
-    
-    init();
+      if (success) {
+        setIsReady(true);
+        setPostureAvailable(analyzer.postureAvailable);
+      } else {
+        setError("Local face tracking could not load. Camera preview remains available.");
+      }
+    });
 
     return () => {
       isMounted = false;
-      if (analyzerRef.current) {
-        analyzerRef.current.stop();
-      }
-      analyzerRef.current = null;
+      analyzer.stop();
+      if (analyzerRef.current === analyzer) analyzerRef.current = null;
       setIsReady(false);
     };
-  }, [isActive]);
+  }, [isActive, withPose]);
 
   useEffect(() => {
-    if (isReady && isActive && videoRef.current && analyzerRef.current) {
-      const video = videoRef.current;
-      const handlePlay = () => {
-        analyzerRef.current.start(video, (newMetrics) => {
-          setMetrics(newMetrics);
-        });
-      };
-      
-      video.addEventListener('loadeddata', handlePlay);
-      if (video.readyState >= 2) {
-        handlePlay();
-      }
-
-      return () => {
-        if (analyzerRef.current) analyzerRef.current.stop();
-        video.removeEventListener('loadeddata', handlePlay);
-      };
-    } else if (!isActive && analyzerRef.current) {
-      analyzerRef.current.stop();
-    }
+    const analyzer = analyzerRef.current;
+    const video = videoRef.current;
+    if (!isReady || !isActive || !video || !analyzer) return undefined;
+    const handlePlay = () => {
+      analyzer.start(video, (next) => {
+        const now = performance.now();
+        if (now - lastUiUpdateRef.current >= UI_UPDATE_INTERVAL_MS) {
+          lastUiUpdateRef.current = now;
+          setMetrics(next);
+        }
+      });
+    };
+    video.addEventListener("loadeddata", handlePlay);
+    if (video.readyState >= 2) handlePlay();
+    return () => {
+      analyzer.pause();
+      video.removeEventListener("loadeddata", handlePlay);
+    };
   }, [isReady, isActive, videoRef]);
 
-  return { metrics, isReady, error };
+  useEffect(() => {
+    const analyzer = analyzerRef.current;
+    if (!analyzer) return;
+    analyzer.resetSegment();
+    setMetrics(analyzer.metrics);
+  }, [segmentKey, isReady]);
+
+  // Latest full-resolution snapshot (UI state is throttled).
+  const snapshot = () => analyzerRef.current?.metrics ?? metrics;
+
+  return { metrics, isReady, error, postureAvailable, snapshot };
 }

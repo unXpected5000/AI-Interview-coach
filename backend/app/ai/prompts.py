@@ -47,7 +47,7 @@ Return strict JSON only with this shape:
 Rules:
 - Provide specific, actionable feedback grouped by the given dimensions in `feedback_by_dimension`.
 - strengths, weaknesses, improvement_suggestions, and learning_roadmap should each contain 2-4 short, concrete items.
-- Base the evaluation on matched points, missing points, answer quality, semantic similarity, and relevance.
+- Base the evaluation on matched points, missing points, answer quality, the lexical text-similarity score, and relevance.
 - Mention actual topics and examples from the interview, avoiding generic praise or criticism.
 - Do not infer confidence, personality, honesty, or emotion from answer wording.
 - Do not assign scores. The application computes all numeric metrics from validated answer data.

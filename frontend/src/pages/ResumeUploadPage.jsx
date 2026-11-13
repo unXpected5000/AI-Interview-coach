@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { deleteResume, listResumes, uploadResume } from "../api/resumeApi.js";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 function formatUploadedAt(value) {
   if (!value) {
@@ -46,7 +47,7 @@ export default function ResumeUploadPage() {
       } catch (requestError) {
         if (active) {
           setError(
-            requestError.response?.data?.detail ?? "Unable to load resumes.",
+            getErrorMessage(requestError, "Unable to load resumes."),
           );
         }
       } finally {
@@ -81,7 +82,7 @@ export default function ResumeUploadPage() {
       event.target.reset();
     } catch (requestError) {
       setError(
-        requestError.response?.data?.detail ?? "Resume upload failed.",
+        getErrorMessage(requestError, "Resume upload failed."),
       );
     } finally {
       setIsUploading(false);
@@ -101,7 +102,7 @@ export default function ResumeUploadPage() {
       setResumes((current) => current.filter((item) => item.id !== resume.id));
       setUploadedResume((current) => (current?.id === resume.id ? null : current));
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Unable to delete resume.");
+      setError(getErrorMessage(requestError, "Unable to delete resume."));
     } finally {
       setDeletingResumeId(null);
     }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { exportInterview } from "../../api/interviewApi.js";
+import { getErrorMessage } from "../../utils/errorMessage.js";
 
 const EXPORTS = [
   ["pdf", "Download PDF"],
@@ -29,7 +30,7 @@ export default function ExportButtons({ interviewId }) {
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "The file could not be downloaded.");
+      setError(getErrorMessage(requestError, "The file could not be downloaded."));
     } finally {
       setActiveFormat("");
     }

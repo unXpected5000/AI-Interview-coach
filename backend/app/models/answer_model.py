@@ -40,7 +40,15 @@ def build_answer_document(
     }
 
 
-def serialize_answer(document: dict[str, Any]) -> dict[str, Any]:
+ANSWER_KEY_FIELDS = ("expected_points", "expected_answer", "matched_points", "missing_points", "key_points")
+
+
+def serialize_answer(document: dict[str, Any], include_answer_key: bool = True) -> dict[str, Any]:
+    """Serialize an answer. Scoring key points are withheld until the interview completes."""
+    evaluation = dict(document.get("evaluation") or {})
+    if not include_answer_key:
+        for key in ANSWER_KEY_FIELDS:
+            evaluation.pop(key, None)
     return {
         "id": str(document["_id"]),
         "user_id": document["user_id"],
@@ -51,11 +59,11 @@ def serialize_answer(document: dict[str, Any]) -> dict[str, Any]:
         "semantic_score": document.get("semantic_score", 0),
         "communication_score": document.get("communication_score", 0),
         "score": document.get("score", document.get("semantic_score", 0)),
-        "matched_points": document.get("matched_points", []),
-        "missing_points": document.get("missing_points", []),
+        "matched_points": document.get("matched_points", []) if include_answer_key else [],
+        "missing_points": document.get("missing_points", []) if include_answer_key else [],
         "completeness_score": document.get("completeness_score", 0),
         "relevance_score": document.get("relevance_score", 0),
-        "evaluation": document.get("evaluation", {}),
+        "evaluation": evaluation,
         "speech_analysis": document.get("speech_analysis", {}),
         "webcam_metrics": document.get("webcam_metrics"),
         "answer_status": document.get("answer_status", "answered"),

@@ -49,6 +49,24 @@ class ScoreRepository:
     async def get_by_interview_and_user(self, interview_id: str, user_id: str) -> dict[str, Any] | None:
         return await self.collection.find_one({"interview_id": interview_id, "user_id": user_id})
 
+    async def list_by_interview_ids_and_user(
+        self, interview_ids: list[str], user_id: str
+    ) -> list[dict[str, Any]]:
+        if not interview_ids:
+            return []
+        return await self.collection.find(
+            {"interview_id": {"$in": interview_ids}, "user_id": user_id},
+            {
+                "interview_id": 1,
+                "assessment_version": 1,
+                "overall_score": 1,
+                "communication_score": 1,
+                "question_scores": 1,
+                "strengths": 1,
+                "weaknesses": 1,
+            },
+        ).to_list(length=len(interview_ids))
+
     async def delete_by_interview_ids_and_user(self, interview_ids: list[str], user_id: str) -> None:
         if interview_ids:
             await self.collection.delete_many(
@@ -74,3 +92,20 @@ class ScoreRepository:
             {"$set": {**values, "assessment_version": 2}},
         )
         return await self.collection.find_one({"interview_id": interview_id, "user_id": user_id})
+
+    async def list_progress_by_users(self, user_ids: list[str]) -> list[dict[str, Any]]:
+        """Score fields needed for staff progress summaries; excludes answer content."""
+        if not user_ids:
+            return []
+        return await self.collection.find(
+            {"user_id": {"$in": user_ids}},
+            {
+                "user_id": 1,
+                "interview_id": 1,
+                "overall_score": 1,
+                "created_at": 1,
+                "question_scores.answer_status": 1,
+                "question_scores.difficulty": 1,
+                "question_scores.score": 1,
+            },
+        ).to_list(length=None)

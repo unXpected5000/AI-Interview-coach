@@ -23,6 +23,15 @@ class LLMResult:
 class LLMClient:
     def __init__(self) -> None:
         self.timeout = settings.llm_timeout_seconds
+        # Reuse pooled TLS connections instead of opening a fresh connection for
+        # every prompt. This is especially helpful on small, CPU-limited hosts.
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(self.timeout, connect=min(5.0, self.timeout)),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+
+    async def close(self) -> None:
+        await self._http.aclose()
 
     async def generate(self, prompt: str) -> str:
         provider = settings.llm_provider.lower().strip()
@@ -59,14 +68,13 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await self._http.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         try:
             return data["choices"][0]["message"]["content"]
@@ -92,14 +100,13 @@ class LLMClient:
             f"{settings.gemini_model}:generateContent"
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                url,
-                headers={"x-goog-api-key": settings.gemini_api_key},
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await self._http.post(
+            url,
+            headers={"x-goog-api-key": settings.gemini_api_key},
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         try:
             parts = data["candidates"][0]["content"]["parts"]

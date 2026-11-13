@@ -1,3 +1,4 @@
+from app.services.camera_metrics import describe_webcam_summary
 import math
 
 from app.services.readiness_service import build_assessment_summary
@@ -26,23 +27,8 @@ class ReportService:
         
         avg_wpm = sum(wpms) / len(wpms) if wpms else 0
 
-        measured_webcam = webcam_summary or {}
-        webcam_parts = []
-        for key, label, suffix in (
-            ("average_face_visibility_pct", "Face detection coverage", "%"),
-            ("average_centered_frame_pct", "Face centered in frame", "%"),
-            ("average_head_movement_index", "Relative head movement index", ""),
-        ):
-            value = measured_webcam.get(key)
-            if value is not None:
-                webcam_parts.append(f"{label}: {float(value):.1f}{suffix}")
-        webcam_text = (
-            f"Approximate local webcam tracking from {measured_webcam.get('answers_with_metrics', 0)} answers: "
-            + "; ".join(webcam_parts)
-            if webcam_parts
-            else "No webcam metrics were recorded for this session."
-        )
-            
+        webcam_text = describe_webcam_summary(webcam_summary or {})
+
         strengths = score_data.get("strengths", [])
         weaknesses = score_data.get("weaknesses", [])
         recommendations = score_data.get("recommendations", [])
@@ -75,7 +61,7 @@ class ReportService:
                 + (f" Pause count: {sum(pause_counts)}." if pause_counts else "")
             ),
             "Technical": f"{answered_questions} of {total_questions} interview question(s) were answered. See per-question evaluations for detail.",
-            "Body Language": webcam_text,
+            "Camera Signals": webcam_text,
             "Strengths": strengths,
             "Weaknesses": weaknesses,
             "Recommendations": recommendations,

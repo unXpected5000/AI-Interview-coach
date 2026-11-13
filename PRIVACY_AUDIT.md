@@ -18,7 +18,7 @@ Repository inspection snapshot: 31 October 2026. This is an engineering inventor
 ## Dependency and asset observations
 
 - Frontend: React, Vite, Axios, Three.js, `@huggingface/transformers`, `@mediapipe/tasks-vision`, Heroicons.
-- Backend: FastAPI, Motor/PyMongo, PyMuPDF, sentence-transformers, Google Auth, JWT/passlib, configured Gemini/OpenAI clients.
+- Backend: FastAPI, Motor/PyMongo, PyMuPDF, Google Auth, standard-library SMTP (verification codes), local lexical answer scoring (no embedding model or embedding API), JWT/passlib, configured Gemini/OpenAI clients.
 - Hosting/data: Cloudflare Pages/Pages Functions proxy, Render, MongoDB Atlas, subject to actual deployment account settings.
 - No payments, analytics, advertising, marketing-email, or avatar-SaaS integration was found.
 - This pass did not independently verify every transitive package license, the avatar asset provenance, model licenses, CDN terms, or provider data processing agreements. Treat those as open audit items.

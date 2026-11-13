@@ -6,8 +6,13 @@ services:
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Readiness check: returns 503 unless MongoDB answers a ping.
     healthCheckPath: /api/health
     envVars:
+      # Render's default Python changes over time (3.14.x for new services as of
+      # 2026-11). Pin the version the dependencies were verified with.
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: APP_ENV
         value: production
       - key: MONGODB_URI
@@ -23,4 +28,22 @@ services:
       - key: GEMINI_MODEL
         value: gemini-3.1-flash-lite
       - key: GEMINI_API_KEY
+        sync: false
+      # Email verification (required for password registration).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_USE_STARTTLS
+        value: "true"
+      # Comma-separated verified addresses promoted to operator on sign-in.
+      - key: OPERATOR_EMAILS
+        sync: false
+      - key: DEPARTMENTS
         sync: false

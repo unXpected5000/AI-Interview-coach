@@ -9,6 +9,14 @@ from app.api.routes import account
 class Cursor:
     def __init__(self, rows): self.rows = rows
     async def to_list(self, length=None): return self.rows
+    def __aiter__(self):
+        self._iter = iter(self.rows)
+        return self
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration:
+            raise StopAsyncIteration
 
 
 class Collection:
@@ -21,7 +29,7 @@ class Collection:
 
 class Database:
     def __init__(self, uid):
-        self.users = Collection([{"_id": ObjectId(uid), "name": "User", "email": "user@example.com", "password_hash": "must-not-export"}])
+        self.users = Collection([{"_id": ObjectId(uid), "name": "User", "email": "user@example.com", "password_hash": "must-not-export", "verification": {"code_hash": "must-not-export"}}])
         self.interviews = Collection([{"_id": ObjectId(), "user_id": uid}])
         self.answers = Collection([{"user_id": uid, "answer_text": "my answer"}, {"user_id": "another-user", "answer_text": "private"}])
         self.scores = Collection(); self.resumes = Collection(); self.resume_optimizations = Collection()
@@ -40,8 +48,13 @@ def test_export_includes_only_owned_records_and_excludes_password_hash(monkeypat
     uid = str(ObjectId()); database = Database(uid)
     monkeypatch.setattr(account, "get_database", lambda: database)
     response = run_immediate(account.export_account_data({"id": uid}))
-    payload = json.loads(response.body)
+
+    async def collect():
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    payload = json.loads(run_immediate(collect()))
     assert "password_hash" not in payload["account"]
+    assert "verification" not in payload["account"]
     assert payload["collections"]["answers"] == [{"user_id": uid, "answer_text": "my answer"}]
     assert all(collection.queries and collection.queries[-1] == {"user_id": uid} for collection in [database.answers, database.scores, database.resumes, database.interviews, database.resume_optimizations])
 

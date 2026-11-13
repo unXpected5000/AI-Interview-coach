@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pymupdf as fitz
 from fastapi import HTTPException, UploadFile, status
 
@@ -13,9 +15,8 @@ from app.repositories.resume_optimizer_repository import ResumeOptimizerReposito
 from app.services.resume_parser_service import ResumeParserService
 from app.services.skill_service import SkillService
 from app.utils.file_validation import is_pdf_file
-from app.ai.llm_client import LLMClient
-from app.services.competency_matrix import COMPETENCY_MATRIX
-import json
+
+UPLOAD_CHUNK_BYTES = 256 * 1024
 
 
 class ResumeService:
@@ -24,7 +25,6 @@ class ResumeService:
         resume_repository: ResumeRepository,
         skill_service: SkillService,
         resume_parser_service: ResumeParserService,
-        llm_client: LLMClient,
         interview_repository: InterviewRepository,
         answer_repository: AnswerRepository,
         score_repository: ScoreRepository,
@@ -33,16 +33,16 @@ class ResumeService:
         self.resume_repository = resume_repository
         self.skill_service = skill_service
         self.resume_parser_service = resume_parser_service
-        self.llm_client = llm_client
         self.interview_repository = interview_repository
         self.answer_repository = answer_repository
         self.score_repository = score_repository
         self.optimizer_repository = optimizer_repository
 
     async def upload_resume(self, user_id: str, file: UploadFile) -> dict:
-        file_bytes = await file.read()
+        file_bytes = await self._read_bounded(file)
         self._validate_upload(file, file_bytes)
-        raw_text = self._extract_text_from_pdf(file_bytes)
+        # PyMuPDF parsing is CPU-bound; keep it off the async request loop.
+        raw_text = await asyncio.to_thread(self._extract_text_from_pdf, file_bytes)
         if not raw_text.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -94,79 +94,6 @@ class ResumeService:
             )
         return serialize_resume(document)
 
-    async def recommend_roles(self, resume_id: str, user_id: str) -> dict:
-        resume = await self.get_resume(resume_id, user_id)
-        if not resume:
-            raise HTTPException(status_code=404, detail="Resume not found")
-        
-        extracted_skills = [s.lower() for s in resume.get("extracted_skills", [])]
-        structured = resume.get("structured_resume", {})
-        
-        candidate_pool = set(extracted_skills)
-        for skill in structured.get("skills", []):
-            candidate_pool.add(skill.lower())
-        for tool in structured.get("tools", []):
-            candidate_pool.add(tool.lower())
-        for proj in structured.get("projects", []):
-            for tech in proj.get("technologies", []):
-                candidate_pool.add(tech.lower())
-        for exp in structured.get("experience", []) + structured.get("internships", []):
-            for tech in exp.get("technologies", []):
-                candidate_pool.add(tech.lower())
-        
-        scores = []
-        for role, skills_map in COMPETENCY_MATRIX.items():
-            max_score = sum(skills_map.values())
-            candidate_score = 0
-            for skill, weight in skills_map.items():
-                if skill.lower() in candidate_pool:
-                    candidate_score += weight
-            match_score = (candidate_score / max_score) * 100 if max_score > 0 else 0
-            scores.append({"role": role, "match_score": round(match_score, 2)})
-            
-        scores.sort(key=lambda x: x["match_score"], reverse=True)
-        top_roles = scores[:3]
-        
-        results = []
-        for role_data in top_roles:
-            role_name = role_data["role"]
-            match_score = role_data["match_score"]
-            prompt = f"""You are a career advisor. For the role '{role_name}' and the following resume context, provide why it fits, evidence used, missing skills, and a learning roadmap.
-            
-Return strict JSON:
-{{
-  "why_it_fits": "string",
-  "evidence_used": ["string"],
-  "missing_skills": ["string"],
-  "learning_roadmap": ["string"]
-}}
-
-Candidate keywords: {list(candidate_pool)}
-"""
-            try:
-                response = await self.llm_client.generate(prompt)
-                parsed = self.llm_client.parse_json(response)
-                results.append({
-                    "role": role_name,
-                    "match_score": match_score,
-                    "why_it_fits": parsed.get("why_it_fits", ""),
-                    "evidence_used": parsed.get("evidence_used", []),
-                    "missing_skills": parsed.get("missing_skills", []),
-                    "learning_roadmap": parsed.get("learning_roadmap", []),
-                })
-            except Exception:
-                results.append({
-                    "role": role_name,
-                    "match_score": match_score,
-                    "why_it_fits": "Good fit based on matching keywords.",
-                    "evidence_used": [],
-                    "missing_skills": [],
-                    "learning_roadmap": [],
-                })
-        
-        return {"resume_id": resume_id, "roles": results}
-
-
     def _validate_upload(self, file: UploadFile, file_bytes: bytes) -> None:
         if not file.filename or not is_pdf_file(file.filename, file.content_type, file_bytes):
             raise HTTPException(
@@ -174,18 +101,38 @@ Candidate keywords: {list(candidate_pool)}
                 detail="Upload a valid PDF file. The file must have a .pdf name and contain a PDF header.",
             )
 
+    async def _read_bounded(self, file: UploadFile) -> bytes:
+        """Read in chunks and stop as soon as the configured limit is exceeded."""
+        max_bytes = settings.max_resume_upload_mb * 1024 * 1024
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await file.read(UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail=f"PDF exceeds maximum size of {settings.max_resume_upload_mb} MB.",
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     def _extract_text_from_pdf(self, pdf_bytes: bytes) -> str:
         max_bytes = settings.max_resume_upload_mb * 1024 * 1024
         if len(pdf_bytes) > max_bytes:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail=f"PDF exceeds maximum size of {settings.max_resume_upload_mb} MB.",
             )
 
         try:
             with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
                 pages: list[str] = []
-                for page in doc:
+                for index, page in enumerate(doc):
+                    if index >= settings.max_resume_pdf_pages:
+                        break
                     pages.append(page.get_text("text"))
         except Exception as exc:
             raise HTTPException(

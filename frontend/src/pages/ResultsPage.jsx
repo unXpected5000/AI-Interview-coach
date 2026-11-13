@@ -7,6 +7,9 @@ import PageHeader from "../components/ui/PageHeader.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import ReportSection from "../components/ui/ReportSection.jsx";
 import ExportButtons from "../components/interview/ExportButtons.jsx";
+import { getErrorMessage } from "../utils/errorMessage.js";
+import CameraSignalsChart from "../components/interview/CameraSignalsChart.jsx";
+import { CAMERA_LIMITS_TEXT } from "../components/interview/CameraSignalsPanel.jsx";
 
 export default function ResultsPage() {
   const { interviewId } = useParams();
@@ -20,7 +23,7 @@ export default function ResultsPage() {
     if (!window.confirm("Permanently delete this interview, its answers, scores and report? This cannot be undone.")) return;
     setIsDeleting(true); setError("");
     try { await deleteInterview(interviewId); navigate("/dashboard", { replace: true }); }
-    catch (requestError) { setError(requestError.response?.data?.detail ?? "Unable to delete this interview."); setIsDeleting(false); }
+    catch (requestError) { setError(getErrorMessage(requestError, "Unable to delete this interview.")); setIsDeleting(false); }
   }
 
   useEffect(() => {
@@ -35,7 +38,7 @@ export default function ResultsPage() {
       } catch (requestError) {
         if (active) {
           setError(
-            requestError.response?.data?.detail ?? "Unable to load results.",
+            getErrorMessage(requestError, "Unable to load results."),
           );
         }
       } finally {
@@ -52,9 +55,7 @@ export default function ResultsPage() {
     };
   }, [interviewId]);
 
-  const interview = interviewState?.interview;
   const score = interviewState?.score;
-  const answers = interviewState?.answers ?? [];
   const questionScores = score?.question_scores ?? [];
   const answeredScores = questionScores.filter((item) => item.answer_status !== "evaluation_failed" && item.answer_status !== "skipped" && String(item.answer_text ?? "").trim());
   const averageMetric = (key, rows = answeredScores) => {
@@ -146,19 +147,22 @@ export default function ResultsPage() {
 
               {score.webcam_summary?.answers_with_metrics > 0 ? (
                 <div className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
-                  <h3 className="text-base font-bold text-stone-950">Webcam estimates</h3>
+                  <h3 className="text-base font-bold text-stone-950">Camera estimates</h3>
                   <p className="mt-1 text-xs text-stone-500">
-                    Approximate face-tracking and framing signals from {score.webcam_summary.answers_with_metrics} answers. Not a measure of confidence or emotion.
+                    Measured on your device during {score.webcam_summary.answers_with_metrics} answer(s). {CAMERA_LIMITS_TEXT}
                   </p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-3">
                     {[
-                      ["Face visible in frame", score.webcam_summary.average_face_visibility_pct, "%"],
+                      ["Face detected", score.webcam_summary.average_face_visibility_pct, "%"],
                       ["Centered in frame", score.webcam_summary.average_centered_frame_pct, "%"],
-                      ["Relative movement index", score.webcam_summary.average_head_movement_index, ""],
-                    ].filter(([, value]) => value !== null && value !== undefined).map(([label, value, suffix]) => (
+                      ["Relative head movement", score.webcam_summary.average_head_movement_index, " / 100"],
+                      ["Est. gaze toward camera", score.webcam_summary.average_gaze_toward_camera_pct, "%"],
+                      ["Upright shoulders (est.)", score.webcam_summary.average_posture_upright_pct, "%"],
+                      ["Average head turn (yaw)", score.webcam_summary.average_head_yaw_deg, "°"],
+                    ].map(([label, value, suffix]) => (
                       <div className="rounded-lg bg-stone-50 p-3" key={label}>
                         <p className="text-xs text-stone-500">{label}</p>
-                        <p className="mt-1 text-lg font-bold text-stone-900">{Number(value).toFixed(1)}{suffix}</p>
+                        <p className="mt-1 text-lg font-bold text-stone-900">{value === null || value === undefined ? <span className="text-sm font-semibold text-stone-400">Not enough data</span> : `${Number(value).toFixed(1)}${suffix}`}</p>
                       </div>
                     ))}
                   </div>
@@ -212,7 +216,7 @@ export default function ResultsPage() {
                         </p>
                       ) : null}
                       {item.answer_status !== "evaluation_failed" && item.answer_status !== "unanswered" && item.answer_status !== "skipped" ? <div className="mt-3 flex flex-wrap gap-2 text-xs text-stone-500">
-                        <span className="rounded-full bg-white px-3 py-1">Semantic {Math.round(item.semantic_score)}</span>
+                        <span className="rounded-full bg-white px-3 py-1" title={item.similarity_method === "lexical_word_phrase_overlap" ? "Word and short-phrase overlap with the reference answer. It does not understand meaning, so correct answers in different words can score lower." : "Earlier sessions used a sentence-embedding similarity model."}>Text similarity {Math.round(item.semantic_score)}{item.similarity_method === "lexical_word_phrase_overlap" ? " (wording overlap)" : ""}</span>
                         <span className="rounded-full bg-white px-3 py-1">Completeness {Math.round(item.completeness_score)}</span>
                         <span className="rounded-full bg-white px-3 py-1">Relevance {Math.round(item.relevance_score)}</span>
                         <span className="rounded-full bg-white px-3 py-1">Communication {Math.round(item.communication_score ?? 0)}</span>
@@ -231,6 +235,9 @@ export default function ResultsPage() {
                         <div className="mt-2 text-sm text-amber-700">
                           Missing: {item.missing_points.join(", ")}
                         </div>
+                      ) : null}
+                      {item.webcam_metrics?.timeline?.length >= 2 ? (
+                        <div className="mt-3 max-w-md"><CameraSignalsChart compact timeline={item.webcam_metrics.timeline} title="Camera estimates during this answer" /></div>
                       ) : null}
                     </div>
                     <span className="rounded-full bg-white px-3 py-1 text-sm font-bold text-teal-700">

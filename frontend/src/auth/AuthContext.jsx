@@ -1,7 +1,15 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-import { getCurrentUser, loginUser, loginWithGoogle as authenticateGoogleUser, registerUser } from "../api/authApi.js";
-import { shouldClearStoredSession } from "./session.js";
+import {
+  getCurrentUser,
+  loginUser,
+  loginWithGoogle as authenticateGoogleUser,
+  registerUser,
+  resendVerification as requestVerificationCode,
+  verifyEmail as submitVerificationCode,
+} from "../api/authApi.js";
+import { updateMyProfile } from "../api/userApi.js";
+import { SESSION_EXPIRED_EVENT, shouldClearStoredSession } from "./session.js";
 import {
   clearAccessToken,
   getAccessToken,
@@ -13,6 +21,9 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Held in memory only (never storage or URL state) so the verification page
+  // can submit the password the user just typed without asking twice.
+  const pendingCredentialsRef = useRef(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -47,31 +58,62 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  async function login(payload) {
-    const data = await loginUser(payload);
+  useEffect(() => {
+    // The API client clears the token on an expired-session 401; drop the user
+    // so protected routes redirect to sign-in instead of showing stale screens.
+    const handleExpired = () => setUser(null);
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleExpired);
+  }, []);
+
+  const startSession = useCallback((data) => {
     setAccessToken(data.access_token);
     setUser(data.user);
+    pendingCredentialsRef.current = null;
     return data.user;
-  }
+  }, []);
 
-  async function loginWithGoogle(credential) {
-    const data = await authenticateGoogleUser(credential);
-    setAccessToken(data.access_token);
-    setUser(data.user);
-    return data.user;
-  }
+  const login = useCallback(async (payload) => {
+    try {
+      return startSession(await loginUser(payload));
+    } catch (requestError) {
+      pendingCredentialsRef.current = { email: payload.email, password: payload.password };
+      throw requestError;
+    }
+  }, [startSession]);
 
-  async function register(payload) {
+  const loginWithGoogle = useCallback(async (credential) => startSession(await authenticateGoogleUser(credential)), [startSession]);
+
+  const register = useCallback(async (payload) => {
     const data = await registerUser(payload);
-    setAccessToken(data.access_token);
-    setUser(data.user);
-    return data.user;
-  }
+    pendingCredentialsRef.current = { email: payload.email, password: payload.password };
+    return data;
+  }, []);
 
-  function logout() {
+  const verifyEmail = useCallback(async ({ email, code, password }) => {
+    const remembered = pendingCredentialsRef.current;
+    const usablePassword = password || (remembered?.email?.toLowerCase() === email.toLowerCase() ? remembered.password : "");
+    return startSession(await submitVerificationCode({ email, code, password: usablePassword }));
+  }, [startSession]);
+
+  const resendVerification = useCallback((email) => requestVerificationCode(email), []);
+
+  const hasRememberedPassword = useCallback(
+    (email) => Boolean(email && pendingCredentialsRef.current?.email?.toLowerCase() === email.toLowerCase()),
+    [],
+  );
+
+  const updateProfile = useCallback(async (payload) => {
+    const updated = await updateMyProfile(payload);
+    setUser(updated);
+    return updated;
+  }, []);
+
+  const logout = useCallback(() => {
     clearAccessToken();
+    pendingCredentialsRef.current = null;
     setUser(null);
-  }
+  }, []);
 
   const value = useMemo(
     () => ({
@@ -81,9 +123,13 @@ export function AuthProvider({ children }) {
       login,
       loginWithGoogle,
       register,
+      verifyEmail,
+      resendVerification,
+      hasRememberedPassword,
+      updateProfile,
       logout,
     }),
-    [user, isLoading],
+    [user, isLoading, login, loginWithGoogle, register, verifyEmail, resendVerification, hasRememberedPassword, updateProfile, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

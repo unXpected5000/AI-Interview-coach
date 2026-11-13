@@ -2,26 +2,12 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import ThemeToggle from "../components/ui/ThemeToggle.jsx";
-
-const navItems = [
-  { label: "Dashboard", path: "/dashboard", mark: "DB" },
-  { label: "Account & data", path: "/account", mark: "AC" },
-  { label: "Start Interview", path: "/interviews/start", mark: "ST" },
-  {
-    label: "Resume Studio",
-    path: "/resumes/upload",
-    mark: "RS",
-    children: [
-      { label: "Upload & manage", path: "/resumes/upload" },
-      { label: "Optimize resume", path: "/resume-optimizer" },
-      { label: "Build from template", path: "/resume-builder" },
-    ],
-  },
-];
+import { navItemsForRole, ROLE_LABELS } from "../auth/roleAccess.js";
 
 export default function AppLayout() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const navItems = navItemsForRole(user?.role);
 
   function handleLogout() {
     logout();
@@ -95,6 +81,7 @@ export default function AppLayout() {
         <div className="mx-4 mt-8 hidden rounded-lg border border-teal-100 bg-teal-50 p-4 lg:block">
           <p className="text-sm font-bold text-teal-900">Signed in as</p>
           <p className="mt-1 text-sm text-teal-800">{user?.name ?? "Candidate"}</p>
+          <p className="mt-1 text-xs font-semibold text-teal-700">{ROLE_LABELS[user?.role] ?? "Student"}{user?.department ? ` · ${user.department}` : ""}{user?.year ? ` · Year ${user.year}` : ""}</p>
           <p className="mt-3 text-xs leading-5 text-teal-700">
             Resume upload, interview generation, evaluation, and feedback all stay
             tied to this account.

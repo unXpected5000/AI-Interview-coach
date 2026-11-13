@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
+import { clearSessionMessage, peekSessionMessage } from "../auth/session.js";
 import GoogleSignInButton from "../components/auth/GoogleSignInButton.jsx";
+import { getErrorCode, getErrorMessage } from "../utils/errorMessage.js";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -10,6 +12,9 @@ export default function LoginPage() {
   const { login, loginWithGoogle } = useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
+  // Shown once after the API client signed the user out on a 401.
+  const [notice] = useState(() => peekSessionMessage());
+  useEffect(() => { clearSessionMessage(); }, []);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const destination = location.state?.from?.pathname ?? "/dashboard";
@@ -30,9 +35,11 @@ export default function LoginPage() {
       await login(form);
       navigate(destination, { replace: true });
     } catch (requestError) {
-      setError(
-        requestError.response?.data?.detail ?? "Login failed. Check your credentials.",
-      );
+      if (getErrorCode(requestError) === "email_verification_required") {
+        navigate("/verify-email", { state: { email: form.email, notice: getErrorMessage(requestError) } });
+        return;
+      }
+      setError(getErrorMessage(requestError, "Login failed. Check your credentials."));
     } finally {
       setIsSubmitting(false);
     }
@@ -45,7 +52,7 @@ export default function LoginPage() {
       await loginWithGoogle(credential);
       navigate(destination, { replace: true });
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Google sign-in failed. Please try again.");
+      setError(getErrorMessage(requestError, "Google sign-in failed. Please try again."));
     } finally {
       setIsSubmitting(false);
     }
@@ -54,6 +61,7 @@ export default function LoginPage() {
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
       <h1 className="text-2xl font-semibold text-gray-950">Login</h1>
+      {notice ? <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">{notice}</p> : null}
       <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
         <label className="block">
           <span className="text-sm font-medium text-gray-700">Email</span>
@@ -81,7 +89,7 @@ export default function LoginPage() {
           />
         </label>
 
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        {error ? <p className="text-sm text-red-600" role="alert">{error}</p> : null}
 
         <button
           className="w-full rounded-md bg-gray-950 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-gray-400"
@@ -99,6 +107,10 @@ export default function LoginPage() {
         Need an account?{" "}
         <Link className="font-medium text-gray-950 underline" to="/register">
           Register
+        </Link>
+        {" · "}
+        <Link className="font-medium text-gray-950 underline" to="/verify-email">
+          Enter a verification code
         </Link>
       </p>
     </section>

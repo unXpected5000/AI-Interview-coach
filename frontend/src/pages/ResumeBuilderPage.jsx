@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { listResumes } from "../api/resumeApi.js";
 import PageHeader from "../components/ui/PageHeader.jsx";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 const layouts = [
   { id: "classic", name: "Classic", description: "Traditional single-column layout" },
@@ -51,7 +52,7 @@ export default function ResumeBuilderPage() {
           setForm(resumeToForm(items[0]));
         }
       })
-      .catch((requestError) => setError(requestError.response?.data?.detail ?? "Unable to load resume data."))
+      .catch((requestError) => setError(getErrorMessage(requestError, "Unable to load resume data.")))
       .finally(() => active && setIsLoading(false));
     return () => { active = false; };
   }, []);

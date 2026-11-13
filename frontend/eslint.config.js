@@ -5,7 +5,7 @@ const browserGlobals = Object.fromEntries(
     "alert", "Blob", "console", "document", "FormData", "localStorage", "MediaStream",
     "navigator", "performance", "requestAnimationFrame", "setTimeout", "clearTimeout",
     "Request", "Response", "fetch", "URL", "window",
-    "Worker", "self",
+    "Worker", "self", "Event", "CustomEvent", "sessionStorage", "AbortController", "cancelAnimationFrame",
   ].map((name) => [name, "readonly"]),
 );
 
@@ -21,8 +21,9 @@ export default [
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     rules: {
-      // ESLint core does not treat JSX tag references as variable usage.
-      "no-unused-vars": "off",
+      // ESLint core does not see JSX tag references as usage, so capitalized
+      // (component) names are exempt; everything else must be used.
+      "no-unused-vars": ["error", { varsIgnorePattern: "^[A-Z]", argsIgnorePattern: "^_", caughtErrors: "none" }],
       "no-empty": ["error", { allowEmptyCatch: true }],
     },
   },

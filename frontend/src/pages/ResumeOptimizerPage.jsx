@@ -5,6 +5,7 @@ import { analyzeResume } from "../api/resumeOptimizerApi.js";
 import DonutScore from "../components/ui/DonutScore.jsx";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import { recordConsent } from "../api/accountApi.js";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 export default function ResumeOptimizerPage() {
   const [resumes, setResumes] = useState([]);
@@ -37,7 +38,7 @@ export default function ResumeOptimizerPage() {
         }));
       } catch (requestError) {
         if (active) {
-          setError(requestError.response?.data?.detail ?? "Unable to load resumes.");
+          setError(getErrorMessage(requestError, "Unable to load resumes."));
         }
       } finally {
         if (active) {
@@ -79,7 +80,7 @@ export default function ResumeOptimizerPage() {
       });
       setResult(data);
     } catch (requestError) {
-      setError(requestError.response?.data?.detail ?? "Resume optimization failed.");
+      setError(getErrorMessage(requestError, "Resume optimization failed."));
     } finally {
       setIsSubmitting(false);
     }

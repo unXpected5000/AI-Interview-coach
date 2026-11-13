@@ -13,9 +13,11 @@ class InterviewQuestion(BaseModel):
     topic_focus: str = ""
     source_section: str = ""
     question: str
-    expected_answer: str
+    # Withheld (None/empty) while the interview is active.
+    expected_answer: str | None = None
     expected_points: list[str] = Field(default_factory=list)
     key_points: list[str] = Field(default_factory=list)
+    follow_up_for: int | None = None
 
 
 class InterviewResponse(BaseModel):

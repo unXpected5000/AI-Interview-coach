@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { deleteAccount, downloadAccountExport, getConsentHistory } from "../api/accountApi.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import PageHeader from "../components/ui/PageHeader.jsx";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 export default function AccountPage() {
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [confirmation, setConfirmation] = useState("");
@@ -12,13 +13,13 @@ export default function AccountPage() {
   async function exportData() {
     setError(""); setBusy(true);
     try { const response = await downloadAccountExport(); const exported = await response.data.text(); const payload = JSON.parse(exported); let browserPreferences = {}; try { browserPreferences = { theme: localStorage.getItem("ai-interview-coach-theme"), cookie_preferences: JSON.parse(localStorage.getItem("ai-interview-coach-cookie-preferences") || "null") }; } catch { browserPreferences = { unavailable: "Browser storage could not be read." }; } payload.browser_preferences = browserPreferences; const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })); const link = document.createElement("a"); link.href = url; link.download = "ai-interview-coach-data.json"; link.click(); URL.revokeObjectURL(url); }
-    catch (e) { setError(e.response?.data?.detail ?? "Could not export your data."); } finally { setBusy(false); }
+    catch (e) { setError(getErrorMessage(e, "Could not export your data.")); } finally { setBusy(false); }
   }
   async function eraseAccount() {
     if (confirmation !== "DELETE") return;
     setError(""); setBusy(true);
     try { await deleteAccount(); logout(); navigate("/register", { replace: true }); }
-    catch (e) { setError(e.response?.data?.detail ?? "Account deletion failed. Your account remains available so you can retry."); } finally { setBusy(false); }
+    catch (e) { setError(getErrorMessage(e, "Account deletion failed. Your account remains available so you can retry.")); } finally { setBusy(false); }
   }
   return <section><PageHeader eyebrow="Account" title="Your data and access" description="Review and manage account information stored by this app." />
     {error && <p role="alert" className="mb-4 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">{error}</p>}
