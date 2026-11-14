@@ -13,6 +13,12 @@ from app.repositories.resume_optimizer_repository import ResumeOptimizerReposito
 from app.repositories.resume_repository import ResumeRepository
 from app.services.resume_parser_service import ResumeParserService
 from app.services.skill_service import SkillService
+from app.services.resume_quality import analyse_bullet, bullet_improvements, compute_breakdown, suggest_bullet, target_keywords_for
+
+# Bump when the analysis changes so stale cached results are recomputed.
+ANALYSIS_VERSION = "2"
+EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+PHONE_PATTERN = re.compile(r"\+?\d[\d\s()-]{8,}")
 from app.utils.mongo import make_json_safe
 
 
@@ -38,6 +44,7 @@ class ResumeOptimizerService:
         target_role: str,
         company_name: str | None = None,
         job_description: str | None = None,
+        department: str | None = None,
     ) -> dict:
         resume = await self.resume_repository.get_by_id_and_user(resume_id, user_id)
         if resume is None:
@@ -46,12 +53,17 @@ class ResumeOptimizerService:
                 detail="Resume not found.",
             )
 
-        structured_resume = resume.get("structured_resume") or self.resume_parser_service.parse(resume.get("raw_text", ""))
+        # Re-parse with the current parser so older uploads get accurate sections.
+        raw_text = resume.get("raw_text") or ""
+        structured_resume = self.resume_parser_service.parse(raw_text) if raw_text else (resume.get("structured_resume") or {})
+        if raw_text:
+            resume = {**resume, "extracted_skills": self.skill_service.extract_skills(raw_text, structured_resume)}
+        self._department = department
         cache_key = self._build_cache_key(
             resume_id=resume_id,
             target_role=target_role,
             company_name=company_name,
-            job_description=job_description,
+            job_description=(job_description or "") + f"|v{ANALYSIS_VERSION}|{department or ''}",
         )
 
         cached = await self.optimizer_repository.get_by_cache_key(cache_key, user_id)
@@ -150,15 +162,16 @@ class ResumeOptimizerService:
             matched_keywords,
         )
 
+        raw_text = resume.get("raw_text") or ""
+        has_contact = bool(EMAIL_PATTERN.search(raw_text)) and bool(PHONE_PATTERN.search(raw_text))
+        breakdown = compute_breakdown(structured_resume, resume.get("extracted_skills", []), keyword_coverage, has_contact)
+        # Keep the overall ATS score consistent with the keyword analysis above.
+        breakdown["ats_score"]["score"] = ats_score
         return {
-            "score_breakdown": {
-                "ats_score": {"score": ats_score, "recommendations": ["Improve keyword density."]},
-                "project_quality": {"score": 70.0, "recommendations": ["Highlight project impact."]},
-                "technical_depth": {"score": 75.0, "recommendations": ["Add more specific technologies."]},
-                "experience_strength": {"score": 80.0, "recommendations": ["Focus on quantifiable achievements."]},
-                "impact_statements": {"score": 65.0, "recommendations": ["Use STAR method for bullet points."]},
-                "resume_structure": {"score": 85.0, "recommendations": ["Ensure clear section headings."]}
-            },
+            "analysis_version": ANALYSIS_VERSION,
+            "score_breakdown": breakdown,
+            "bullet_improvements": bullet_improvements(structured_resume),
+            "matched_keywords": matched_keywords[:15],
             "strengths": strengths or [f"Profile shows a relevant background for {target_role}."],
             "gaps": gaps or ["Add role-specific keywords and a few more concrete outcomes."],
             "suggested_keywords": suggested_keywords,
@@ -187,17 +200,20 @@ class ResumeOptimizerService:
                 "recommendations": self._normalize_list(cat.get("recommendations", [])) or local_breakdown.get(key, {}).get("recommendations", [])
             }
 
-        score_breakdown = {
-            "ats_score": _get_category("ats_score"),
-            "project_quality": _get_category("project_quality"),
-            "technical_depth": _get_category("technical_depth"),
-            "experience_strength": _get_category("experience_strength"),
-            "impact_statements": _get_category("impact_statements"),
-            "resume_structure": _get_category("resume_structure"),
-        }
+        # Scores stay the measured local values; the model may only add advice.
+        score_breakdown = {}
+        for key, local in local_breakdown.items():
+            model_recs = _get_category(key)["recommendations"] if isinstance(parsed_breakdown.get(key), dict) else []
+            score_breakdown[key] = {
+                "score": local["score"],
+                "recommendations": self._dedupe_sentences(local["recommendations"] + model_recs)[:4],
+            }
 
         return {
+            "analysis_version": local_result.get("analysis_version"),
             "score_breakdown": score_breakdown,
+            "bullet_improvements": local_result.get("bullet_improvements", []),
+            "matched_keywords": local_result.get("matched_keywords", []),
             "strengths": self._dedupe_sentences(self._normalize_list(parsed.get("strengths", [])) or local_result["strengths"]),
             "gaps": self._dedupe_sentences(self._normalize_list(parsed.get("gaps", [])) or local_result["gaps"]),
             "suggested_keywords": self._dedupe_sentences(
@@ -239,6 +255,9 @@ class ResumeOptimizerService:
         technical_hits = self.skill_service.extract_skills(job_description or target_role)
         for hit in technical_hits:
             tokens.add(self._normalize_keyword(hit))
+        # Role and department keyword sets give a meaningful target even without a job description.
+        for keyword in target_keywords_for(target_role, getattr(self, "_department", None)):
+            tokens.add(self._normalize_keyword(keyword))
         lowered_role = target_role.lower()
         role_maps = {
             "frontend": ["react", "javascript", "typescript", "html", "css", "tailwind"],
@@ -254,7 +273,9 @@ class ResumeOptimizerService:
                     tokens.add(self._normalize_keyword(keyword))
         if not tokens:
             tokens.add(self._normalize_keyword(target_role))
-        return {token for token in tokens if token}
+        # Generic words from a role title ("engineer", "intern") are not skills.
+        generic = {"engineer", "intern", "developer", "analyst", "trainee", "graduate", "junior", "senior", "associate", "fresher"}
+        return {token for token in tokens if token and token not in generic and token != self._normalize_keyword(target_role)} or {self._normalize_keyword(target_role)}
 
     def _section_coverage(self, structured_resume: dict[str, Any]) -> float:
         section_count = 0
@@ -304,14 +325,16 @@ class ResumeOptimizerService:
             if str(line).strip()
         ]
         experience_lines = [
-            self._rewrite_bullet(item.get("raw_text", item.get("description", "")))
+            self._rewrite_bullet(highlight)
             for item in (structured_resume.get("experience", []) + structured_resume.get("internships", []))[:4]
-            if str(item.get("raw_text", item.get("description", ""))).strip()
+            for highlight in (item.get("highlights") or [])[:2]
+            if str(highlight).strip()
         ]
         project_lines = [
-            self._rewrite_bullet(item.get("raw_text", item.get("description", "")))
+            self._rewrite_bullet(highlight)
             for item in structured_resume.get("projects", [])[:4]
-            if str(item.get("raw_text", item.get("description", ""))).strip()
+            for highlight in (item.get("highlights") or [item.get("description", "")])[:2]
+            if str(highlight).strip()
         ]
 
         if not summary_lines:
@@ -354,9 +377,8 @@ class ResumeOptimizerService:
             return ""
         if cleaned[0].islower():
             cleaned = cleaned[0].upper() + cleaned[1:]
-        if not re.match(r"^(Built|Implemented|Developed|Led|Created|Designed|Supported|Owned|Contributed)", cleaned):
-            cleaned = f"Contributed to {cleaned[0].lower() + cleaned[1:]}"
-        return cleaned
+        analysis = analyse_bullet(cleaned)
+        return cleaned + "." if not analysis["issues"] else suggest_bullet(cleaned, analysis)
 
     def _build_cache_key(
         self,
@@ -410,7 +432,7 @@ class ResumeOptimizerService:
         return sorted({value for value in values if value})
 
     def _normalize_keyword(self, value: str) -> str:
-        cleaned = re.sub(r"[^a-z0-9+\s-]", " ", value.lower())
+        cleaned = re.sub(r"[^a-z0-9+&#.\s-]", " ", value.lower()).strip(" .")
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 

@@ -69,8 +69,9 @@ export function buildLegalPages(config = legalConfig) {
           "Email delivery: the SMTP provider configured by the operator, which receives your email address and the verification message.",
           "Google Identity Services: when you choose Google sign-in.",
           "AI model provider (Google Gemini or OpenAI, if configured): receives resume context to generate questions, and answers with evaluation context to write feedback. Answers are not sent to any embedding service; scoring runs on our server.",
-          "Your browser's speech services: browser speech recognition may send microphone audio to the browser vendor. The built-in Whisper fallback runs on your device.",
-          "Model downloads: the on-device speech model and camera models are downloaded from public model hosts (Hugging Face, Google model storage, and jsDelivr for some runtime files). These hosts see your IP address, but not your answers or video.",
+          "Speech recognition: in Auto mode your browser's speech recognition may send microphone audio to the browser vendor; if it fails, or if you choose on-device mode, transcription runs on your device (Moonshine model) and audio never leaves it.",
+          "Interviewer voice: the natural voice (Kokoro model) is generated on your device; questions are not sent to a speech service. The browser voice option uses your browser's built-in voices.",
+          "Model downloads: the on-device speech, voice, and camera models are downloaded from public model hosts (Hugging Face, Google model storage, and jsDelivr for some runtime files). These hosts see your IP address, but not your answers, audio, or video.",
         ],
       },
       {

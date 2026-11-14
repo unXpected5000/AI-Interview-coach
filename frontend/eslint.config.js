@@ -5,13 +5,22 @@ const browserGlobals = Object.fromEntries(
     "alert", "Blob", "console", "document", "FormData", "localStorage", "MediaStream",
     "navigator", "performance", "requestAnimationFrame", "setTimeout", "clearTimeout",
     "Request", "Response", "fetch", "URL", "window",
-    "Worker", "self", "Event", "CustomEvent", "sessionStorage", "AbortController", "cancelAnimationFrame",
+    "Worker", "self", "Event", "AudioWorkletNode", "caches", "AudioContext", "CustomEvent", "sessionStorage", "AbortController", "cancelAnimationFrame",
   ].map((name) => [name, "readonly"]),
 );
 
 export default [
   { ignores: ["dist/**", "node_modules/**"] },
   js.configs.recommended,
+  {
+    // Node build and verification scripts.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: { process: "readonly", console: "readonly", performance: "readonly", fetch: "readonly", URL: "readonly" },
+    },
+  },
   {
     files: ["**/*.{js,jsx}"],
     languageOptions: {

@@ -52,6 +52,8 @@ def serialize_question(question: dict[str, Any], include_answer_key: bool = True
         serialized["key_points"] = []
     if question.get("follow_up_for") is not None:
         serialized["follow_up_for"] = question.get("follow_up_for")
+    if question.get("transition"):
+        serialized["transition"] = str(question["transition"])[:160]
     return serialized
 
 

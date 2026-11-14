@@ -5,14 +5,14 @@ A full-stack interview practice application. Candidates manage and build resumes
 ## Project layout
 
 - `backend/`: FastAPI application, MongoDB repositories, resume parsing, question generation/adaptation, answer evaluation, coaching reports, and export endpoints.
-- `frontend/`: React + Vite application, webcam capture, browser speech recognition with a local Whisper fallback, interview flow, results, and resume management.
+- `frontend/`: React + Vite application, webcam capture, live speech recognition (browser service or on-device Moonshine), an on-device natural interviewer voice (Kokoro), interview flow, results, and resume management.
 
 ## Workflow
 
 1. Register with name, email, password, department and year, then enter the 6-digit code emailed to you (no session is issued until the address is verified). Google sign-in also works; Google users add department and year on first sign-in.
 2. In Resume Studio, upload and manage a PDF, optimize it for a target role, or use the built-in Classic, Modern, and Compact resume layouts.
 3. Start an interview. The backend creates ten resume/skill-based questions. Choose LOW, MEDIUM, HARD, or INTERVIEW READY difficulty and fixed or adaptive behavior, then choose question-by-question practice or the call-style live room.
-4. In the live room, browser text-to-speech reads each question. Browser speech recognition supplies the lowest-latency transcript when available; if it disconnects or is unsupported, an in-browser Whisper model shows a rolling transcript preview and rechecks the complete answer when submitted. Typed mode is always available. A procedural Three.js interviewer responds to idle, listening, thinking, speaking, interruption, and disconnected states. Webcam access starts only after the candidate enables it, and approximate face tracking runs locally.
+4. In the live room the interviewer speaks with a natural on-device voice (Kokoro-82M, about 90 MB downloaded once; the browser voice is an option). The next planned question is synthesised while you answer, so it plays without a pause. Speech recognition is live: Auto uses the browser's recognizer and switches instantly to on-device Moonshine transcription if that fails, without losing what you already said; "On-device only" never sends audio anywhere. Typed mode is always available. The 3D interviewer blinks, shifts gaze, nods while listening, raises or knits its brows, smiles, breathes, and lip-syncs to the actual voice audio. A realistic avatar can replace it (see below). Webcam access starts only after the candidate enables it, and approximate face tracking runs locally.
 5. The server derives filler and word counts from the transcript, computes speech timing from browser timing metadata, and may add a follow-up (up to three per interview). Adaptive difficulty uses the last three evaluated answers and moves only one level at a time; skips and evaluation failures do not trigger a change. The 80/55 cutoffs are coaching heuristics, not validated ability measures.
 6. Skip is available in both practice and live modes (skipped questions score 0). Complete or end a session to save coaching scores and a report. Export a completed report as PDF, or export session JSON/transcript. Delete a resume to remove its optimization history, interviews, answers, and scores.
 
@@ -32,7 +32,15 @@ The live webcam panel can be dragged with its header and resized from its corner
 
 ## Speech recognition and privacy
 
-The browser's SpeechRecognition service may send microphone audio to the browser's recognition provider. The Whisper fallback runs in a web worker on the candidate's device and keeps its backup audio in memory only; it does not upload or persist the recording. Only the transcript is submitted to this application. The fallback currently recognizes English and downloads the quantized model (about 45 MB) from the public Hugging Face model repository on first use; the browser caches it for later sessions. A live fallback preview runs on short overlapping windows, then the complete recording is transcribed once more when the answer is finished. If model download or local inference fails, typed answers remain available.
+The browser's SpeechRecognition service may send microphone audio to the browser's recognition provider. On-device transcription (Moonshine, about 60 MB downloaded once from Hugging Face) runs in a web worker: an energy-based voice detector splits speech into phrases, previews update about once a second, and each phrase is finalised after a pause. Audio stays in memory on the device and only the transcript is submitted. On a CPU-only laptop captions trail speech by roughly 2-3 seconds; WebGPU-capable browsers are faster. English only.
+
+`node scripts/verifySpeechModels.mjs` (in `frontend/`) runs a round trip (Kokoro speaks, Moonshine transcribes) to check both models outside the browser.
+
+### Realistic interviewer avatar (optional)
+
+Place a glTF binary at `frontend/public/avatars/interviewer.glb` with ARKit facial blendshapes (`jawOpen`, `eyeBlinkLeft`, `mouthSmileLeft`, `browInnerUp`, ...) and, ideally, Oculus visemes (`viseme_aa`, `viseme_O`, ...). Avatars exported from tools such as Avaturn or Character Creator usually include these; check the asset's license. The app frames the head and shoulders and drives the same blinking, gaze, expressions, head motion, and lip-sync. Without the file, the built-in avatar is used.
+
+Third-party notices: Kokoro text preparation in `src/speech/kokoroText.js` is adapted from kokoro-js (Apache-2.0). The `phonemizer` package bundles espeak-ng, which is licensed GPL-3.0-or-later; consider this if you distribute the app under other terms.
 
 ## Requirements
 

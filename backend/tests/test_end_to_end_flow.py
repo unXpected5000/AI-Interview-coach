@@ -81,7 +81,7 @@ def make_pdf() -> bytes:
     return data
 
 
-def signup(client, email_capture, email, department="Computer Science", year=2):
+def signup(client, email_capture, email, department="Comps", year=2):
     password = "a long password 123"
     response = client.post("/api/auth/register", json={"name": email.split("@")[0].title(), "email": email, "password": password, "department": department, "year": year})
     assert response.status_code == 202, response.text
@@ -149,7 +149,7 @@ def test_full_student_staff_and_operator_workflow(api):
     assert operator["role"] == "operator"
     hod_headers, hod = signup(client, email_capture, "hod@example.com")
     assert client.get("/api/department/students", headers=hod_headers).status_code == 403
-    promoted = client.put(f"/api/admin/users/{hod['id']}/role", headers=operator_headers, json={"role": "department_faculty", "department": "Computer Science"})
+    promoted = client.put(f"/api/admin/users/{hod['id']}/role", headers=operator_headers, json={"role": "department_faculty", "department": "Comps"})
     assert promoted.status_code == 200, promoted.text
 
     # HOD: sees own department summary only, no answers/transcripts/resume text.
@@ -161,13 +161,13 @@ def test_full_student_staff_and_operator_workflow(api):
     assert detail.status_code == 200
     assert "FastAPI service" not in detail.text and "Jane Doe" not in detail.text
     assert detail.json()["interviews"][0]["status"] in {"completed", "active"}
-    moved = client.patch(f"/api/department/students/{student['id']}", headers=hod_headers, json={"department": "Mechanical"})
+    moved = client.patch(f"/api/department/students/{student['id']}", headers=hod_headers, json={"department": "Mech"})
     assert moved.status_code == 403
     edited = client.patch(f"/api/department/students/{student['id']}", headers=hod_headers, json={"year": 3, "phone": "+1 555 010 0200"})
     assert edited.status_code == 200 and edited.json()["year"] == 3
 
     # Operator moves the student across departments; the HOD then loses access.
-    assert client.patch(f"/api/admin/users/{student['id']}", headers=operator_headers, json={"department": "Mechanical"}).status_code == 200
+    assert client.patch(f"/api/admin/users/{student['id']}", headers=operator_headers, json={"department": "Mech"}).status_code == 200
     assert client.get(f"/api/department/students/{student['id']}", headers=hod_headers).status_code == 404
 
     # Expired/invalid tokens produce a 401 the frontend turns into a sign-out.

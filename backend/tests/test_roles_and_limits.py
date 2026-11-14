@@ -21,7 +21,7 @@ from tests.fake_mongo import FakeDatabase
 NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
 
 
-def add_user(database, name, role="student", department="Computer Science", year=2, verified=True):
+def add_user(database, name, role="student", department="Comps", year=2, verified=True):
     document = {
         "_id": ObjectId(), "name": name, "email": f"{name.lower().replace(' ', '.')}@example.com",
         "password_hash": "hash", "google_id": None, "email_verified": verified, "role": role,
@@ -36,10 +36,10 @@ def add_user(database, name, role="student", department="Computer Science", year
 def world():
     database = FakeDatabase()
     cs_hod = add_user(database, "Cs Hod", role="department_faculty")
-    me_hod = add_user(database, "Me Hod", role="department_faculty", department="Mechanical")
+    me_hod = add_user(database, "Me Hod", role="department_faculty", department="Mech")
     operator = add_user(database, "Op Erator", role="operator", department=None)
     cs_student = add_user(database, "Cs Student")
-    me_student = add_user(database, "Me Student", department="Mechanical")
+    me_student = add_user(database, "Me Student", department="Mech")
     pending = add_user(database, "Pending Person", verified=False)
     interview_id = ObjectId()
     asyncio.run(database["interviews"].insert_one({
@@ -95,7 +95,7 @@ def test_hod_edits_are_limited_to_profile_fields_and_own_department(world):
     ok = client.patch(f"/api/department/students/{student_id}", json={"name": "Renamed Student", "year": 3, "phone": "+1 555 0100", "role": "operator"})
     assert ok.status_code == 200
     assert ok.json()["year"] == 3 and ok.json()["role"] == "student"
-    moved = client.patch(f"/api/department/students/{student_id}", json={"department": "Mechanical"})
+    moved = client.patch(f"/api/department/students/{student_id}", json={"department": "Mech"})
     assert moved.status_code == 403
     other = client.patch(f"/api/department/students/{world['me_student']['id']}", json={"name": "Hijacked"})
     assert other.status_code == 404
@@ -107,7 +107,7 @@ def test_users_cannot_escalate_or_move_themselves(world):
     world["as"](world["cs_student"])
     response = client.patch("/api/users/me", json={"name": "New Name", "role": "operator"})
     assert response.status_code == 200 and response.json()["role"] == "student"
-    assert client.patch("/api/users/me", json={"department": "Mechanical"}).status_code == 403
+    assert client.patch("/api/users/me", json={"department": "Mech"}).status_code == 403
     assert client.patch("/api/users/me", json={"year": 4}).status_code == 403
 
 
@@ -125,7 +125,7 @@ def test_operator_manages_roles_and_cross_department_moves(world):
     client = world["client"]
     world["as"](world["operator"])
     student_id = world["cs_student"]["id"]
-    assert client.patch(f"/api/admin/users/{student_id}", json={"department": "Mechanical"}).json()["department"] == "Mechanical"
+    assert client.patch(f"/api/admin/users/{student_id}", json={"department": "Mech"}).json()["department"] == "Mech"
     promoted = client.put(f"/api/admin/users/{world['me_student']['id']}/role", json={"role": "department_faculty", "department": "Civil"})
     assert promoted.status_code == 200 and promoted.json()["role"] == "department_faculty" and promoted.json()["department"] == "Civil"
     assert promoted.json()["year"] is None

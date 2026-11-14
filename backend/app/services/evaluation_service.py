@@ -8,6 +8,8 @@ from typing import Any
 from app.ai.embeddings import cosine_similarity_score
 from app.services.speech_service import SpeechService
 
+CONVERSATIONAL_TYPES = {"introduction", "behavioral", "situational", "closing"}
+
 
 class EvaluationService:
     def __init__(self, speech_service: SpeechService | None = None):
@@ -40,7 +42,7 @@ class EvaluationService:
         communication_score = self.speech_service.communication_score(speech_analysis, answer_text)
 
         structure_score = self._score_structure(answer_text)
-        is_behavioral = question.get("question_type") in {"behavioral", "situational"}
+        is_behavioral = question.get("question_type") in CONVERSATIONAL_TYPES
         technical_depth = 0.0 if is_behavioral else self._score_technical_depth(answer_text, expected_points)
 
         final_score = self._combine_scores(
@@ -144,7 +146,7 @@ class EvaluationService:
                     "communication_score": communication_score,
                     "structure_score": self._bounded_score(evaluation.get("structure_score", answer.get("structure_score", 0.0))),
                     "technical_depth_score": (
-                        None if question.get("question_type") in {"behavioral", "situational"}
+                        None if question.get("question_type") in CONVERSATIONAL_TYPES
                         else self._bounded_score(evaluation.get("technical_depth_score", answer.get("technical_depth_score", 0.0)))
                     ),
                     "matched_points": list(

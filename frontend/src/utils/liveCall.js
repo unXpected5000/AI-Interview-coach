@@ -49,3 +49,14 @@ export function turnLabel({ callActive, isSpeaking, isListening, isSaving, micro
   if (isListening) return { tone: "you", text: microphoneState === "speech_detected" ? "Your turn — listening" : "Your turn — speak when ready" };
   return { tone: "paused", text: "Microphone paused — unmute or type to answer" };
 }
+
+/** What the interviewer says: greeting or acknowledgement, transition, then the question. */
+export function spokenQuestion(question, { first, previousStatus, turn }) {
+  const transition = String(question.transition ?? "").trim();
+  if (!transition) {
+    return `${bridgeBeforeQuestion({ first, previousStatus, isFollowUp: question.follow_up_for != null, turn })}${question.question}`;
+  }
+  const opener = first ? "Hi, thanks for joining. Take your time with each answer. " : previousStatus === "skipped" ? "No problem. " : "";
+  const body = /,$/.test(transition) ? question.question.replace(/^[A-Z](?![A-Z])/, (letter) => letter.toLowerCase()) : question.question;
+  return `${opener}${transition} ${body}`;
+}

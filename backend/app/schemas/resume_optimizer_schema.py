@@ -24,6 +24,14 @@ class ScoreBreakdown(BaseModel):
     resume_structure: ScoreCategory
 
 
+class BulletImprovement(BaseModel):
+    section: str = ""
+    entry: str = ""
+    original: str
+    issues: list[str] = Field(default_factory=list)
+    suggestion: str = ""
+
+
 class ResumeOptimizationResult(BaseModel):
     score_breakdown: ScoreBreakdown
     strengths: list[str]
@@ -31,6 +39,9 @@ class ResumeOptimizationResult(BaseModel):
     suggested_keywords: list[str]
     rewritten_sections: dict
     optimized_summary: str
+    analysis_version: str | None = None
+    bullet_improvements: list[BulletImprovement] = Field(default_factory=list)
+    matched_keywords: list[str] = Field(default_factory=list)
 
 
 class ResumeOptimizationResponse(BaseModel):

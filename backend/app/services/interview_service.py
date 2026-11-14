@@ -16,6 +16,7 @@ from app.services.question_service import QuestionService
 from app.services.speech_service import SpeechService
 from app.services.report_service import ReportService
 from app.services.difficulty_service import next_difficulty, valid_evaluation_scores
+from app.services.question_service import CONVERSATIONAL_TYPES
 
 
 class InterviewService:
@@ -41,7 +42,14 @@ class InterviewService:
         self.speech_service = speech_service
         self.report_service = report_service
 
-    async def start_interview(self, user_id: str, resume_id: str, difficulty: str = "medium", difficulty_mode: str = "adaptive") -> dict:
+    async def start_interview(
+        self,
+        user_id: str,
+        resume_id: str,
+        difficulty: str = "medium",
+        difficulty_mode: str = "adaptive",
+        candidate: dict | None = None,
+    ) -> dict:
         try:
             resume = await self.resume_repository.get_by_id_and_user(resume_id, user_id)
         except ValueError as exc:
@@ -69,7 +77,11 @@ class InterviewService:
                 and settings_used.get("mode", "adaptive") == difficulty_mode
             ):
                 return serialize_interview(existing)
-        questions = await self.question_service.generate_questions(resume, {"difficulty": difficulty, "difficulty_mode": difficulty_mode})
+        context = {"difficulty": difficulty, "difficulty_mode": difficulty_mode}
+        if candidate:
+            # Department and year let questions fit the student's field and level.
+            context["candidate"] = {key: candidate.get(key) for key in ("department", "year") if candidate.get(key)}
+        questions = await self.question_service.generate_questions(resume, context)
         skills = resume.get("extracted_skills", [])
         document = await self.interview_repository.create(
             user_id=user_id,
@@ -242,7 +254,7 @@ class InterviewService:
                 "score": 0, "semantic_score": 0, "completeness_score": 0,
                 "relevance_score": 0, "keyword_coverage": 0,
                 "communication_score": 0, "structure_score": 0,
-                "technical_depth_score": None if question.get("question_type") in {"behavioral", "situational"} else 0,
+                "technical_depth_score": None if question.get("question_type") in CONVERSATIONAL_TYPES else 0,
                 "matched_points": [], "missing_points": [], "expected_points": [],
                 "answer_quality": 0, "speech_analysis": {},
             }
@@ -315,7 +327,17 @@ class InterviewService:
         )
         follow_up_count = sum(1 for item in saved_questions if item.get("follow_up_for") is not None)
         follow_up_question = existing_follow_up
-        should_follow_up = answer_status in {"answered", "partial", "interrupted"} and score_payload.get("score") is not None and (score < 50 or score >= 80)
+        # Real interviewers follow up on substantive answers, not on "I don't know",
+        # and do not chain follow-ups onto follow-ups or the opener/closing.
+        answer_words = len(str(answer_text or "").split())
+        should_follow_up = (
+            answer_status in {"answered", "partial", "interrupted"}
+            and score_payload.get("score") is not None
+            and (score < 50 or score >= 80)
+            and question.get("follow_up_for") is None
+            and question.get("question_type") not in {"introduction", "closing"}
+            and answer_words >= 15
+        )
         if follow_up_question is None and should_follow_up and follow_up_count < 3:
             next_question_id = max((int(item.get("question_id", 0)) for item in saved_questions), default=0) + 1
             candidate = await self.question_service.generate_follow_up(

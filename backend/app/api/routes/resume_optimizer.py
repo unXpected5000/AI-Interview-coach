@@ -23,4 +23,5 @@ async def analyze_resume(
         target_role=payload.target_role,
         company_name=payload.company_name,
         job_description=payload.job_description,
+        department=current_user.get("department"),
     )
