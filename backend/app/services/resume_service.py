@@ -60,9 +60,17 @@ class ResumeService:
         )
         return serialize_resume(document)
 
+    def _refresh_structure(self, document: dict) -> dict:
+        """Re-parse stored text so older uploads benefit from parser improvements."""
+        raw_text = document.get("raw_text")
+        if not raw_text:
+            return document
+        structured = self.resume_parser_service.parse(raw_text)
+        return {**document, "structured_resume": structured, "extracted_skills": self.skill_service.extract_skills(raw_text, structured)}
+
     async def list_resumes(self, user_id: str) -> list[dict]:
         documents = await self.resume_repository.list_by_user(user_id)
-        return [serialize_resume(document) for document in documents]
+        return [serialize_resume(self._refresh_structure(document)) for document in documents]
 
     async def delete_resume(self, resume_id: str, user_id: str) -> None:
         try:
@@ -92,7 +100,7 @@ class ResumeService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Resume not found.",
             )
-        return serialize_resume(document)
+        return serialize_resume(self._refresh_structure(document))
 
     def _validate_upload(self, file: UploadFile, file_bytes: bytes) -> None:
         if not file.filename or not is_pdf_file(file.filename, file.content_type, file_bytes):

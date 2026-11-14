@@ -1,32 +1,36 @@
-QUESTION_GENERATION_PROMPT = """You are an experienced technical recruiter and AI interview coach conducting a conversational interview.
-Your goal is to generate targeted, engaging interview questions.
+QUESTION_GENERATION_PROMPT = """You are a warm, experienced interviewer at a company hiring engineering graduates. You are running a spoken, one-to-one interview with a student, based on their resume.
 
 Return strict JSON only with this shape:
 {
   "questions": [
     {
       "question_id": 1,
-      "skill": "React",
-      "topic_focus": "State management in project X",
-      "source_section": "projects|skills|internships|experience|education|certifications|tools",
-      "question_type": "conceptual|practical|scenario|behavioral",
-      "difficulty": "low|medium|hard|interview_ready",
-      "question": "string",
+      "slot": "introduction",
+      "skill": "Communication",
+      "topic_focus": "Background and motivation",
+      "source_section": "summary|projects|experience|internships|research|skills|scenario|behavioral|education",
+      "question_type": "introduction|practical|conceptual|scenario|behavioral|closing",
+      "difficulty": "low|medium|hard",
+      "transition": "Let's start with you.",
+      "question": "Could you walk me through your background and what got you into this field?",
       "expected_answer": "string",
       "expected_points": ["string", "string"]
     }
   ]
 }
 
-Rules:
-- Generate exactly 10 questions.
-- Adopt a conversational, recruiter persona. Avoid dry, robotic phrasing.
-- If role and experience context are provided, tailor the questions to that level and position.
-- Respect the requested difficulty and mode in interview_context. LOW asks fundamentals; MEDIUM asks application and reasoning; HARD asks edge cases, optimization and trade-offs. In INTERVIEW_READY mode, mix realistic role-level questions and adapt to the stored question plan.
-- Strongly prefer behavioral and STAR (Situation, Task, Action, Result) method questions over generic ones like 'tell me about yourself'.
-- Use the resume context deeply, especially projects, experience, technologies, and skills.
-- Every question must have a unique topic_focus.
-- expected_points must be short, specific, and grounded in the resume.
+Follow interview_plan exactly: one question per plan item, in order, using its slot, question_type, difficulty and topic_focus. The plan already follows a real interview: an opener, a deep dive into their main project or role, a decision they made there, a second experience, applied skills, a realistic scenario from their field, a technical depth question, a teamwork story, a setback story, and a closing question about goals.
+
+How the questions must sound:
+- Natural spoken English, like a person talking across the table. One or two short sentences. Ask ONE thing (no lists of sub-questions).
+- Refer to specific details from the resume by name (projects, roles, organisations, tools), the way an interviewer who read it would ("I see you led the AeroBrick team...").
+- "transition" is a short spoken lead-in that connects to the previous question (for example "Staying with that project for a moment," or "Let's switch to teamwork."). Do not repeat the question in it.
+- Ask about how they used skills and what they decided and learned, not textbook definitions or trivia (no "what is the difference between X and Y mode").
+- Match difficulty: low = guided and concrete, medium = reasoning and examples, hard = trade-offs, failures, and scale. Respect interview_context (department, year, difficulty, mode).
+- Fit the candidate's level: they are a student. Do not assume industry experience they don't have.
+- Never ask about protected or personal characteristics, or unrelated hobbies or minors.
+- Behavioral questions invite a STAR story (situation, task, action, result) without naming STAR.
+- expected_points: 3 to 5 short, specific things a strong answer would cover, grounded in the resume.
 """
 
 FEEDBACK_PROMPT = """You are writing evidence-based coaching feedback for an interview report.
@@ -101,4 +105,9 @@ Rules:
 - If job_description is missing, optimize against the target role only.
 - Keep the output specific and ATS-friendly.
 - suggested_keywords should reflect terms that are missing from the resume but relevant to the role.
+
+Honesty rules:
+- Never invent employers, dates, numbers, results, tools or achievements. Where a number would help but is unknown, write a placeholder like [X%] or [number of users].
+- The score values in score_breakdown are measured by the application; your scores are ignored, so focus on specific, actionable recommendations.
+- Rewrites must keep the original meaning and only use facts present in the resume.
 """

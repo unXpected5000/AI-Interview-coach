@@ -21,6 +21,10 @@ services:
         value: ai_interview_coach
       - key: GOOGLE_CLIENT_ID
         sync: false
+      # Browser origins allowed to call the API directly, comma-separated, e.g.
+      # https://ai-interview-coach-3bj.pages.dev (exact origin, no trailing slash).
+      - key: BACKEND_CORS_ORIGINS
+        sync: false
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: LLM_PROVIDER

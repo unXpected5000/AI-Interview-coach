@@ -56,11 +56,8 @@ class Settings(BaseSettings):
     # sign-in. There is no hardcoded default.
     operator_emails: str = ""
     # Comma-separated department names offered to students and staff.
-    departments: str = (
-        "Computer Science,Information Technology,Electronics and Communication,"
-        "Electrical,Mechanical,Civil"
-    )
-    max_study_year: int = Field(default=5, ge=1, le=10)
+    departments: str = "AI and DS,Comps,IT,Mechatronics,ELX,EXTC,Mech,Civil"
+    max_study_year: int = Field(default=4, ge=1, le=10)
 
     # In-memory, single-process limits. They reset on restart and are not shared
     # between instances. Set a header name only when the API is reachable solely
@@ -87,9 +84,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [
-            origin.strip()
+            # Browsers send origins without a trailing slash; tolerate one in config.
+            origin.strip().rstrip("/")
             for origin in self.backend_cors_origins.split(",")
-            if origin.strip()
+            if origin.strip().rstrip("/")
         ]
 
     @property

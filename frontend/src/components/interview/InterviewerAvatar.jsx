@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
+import { blinkAmount, blendExpression, breath, gazeAt, headMotion, approach } from "./avatarBehavior.js";
+import { loadRealisticAvatar } from "./realisticAvatar.js";
+
 const stateCopy = {
   idle: "Ready when you are",
   listening: "Listening",
@@ -42,8 +45,16 @@ function createHeadGeometry() {
   return geometry;
 }
 
-export default function InterviewerAvatar({ state = "idle", speechActivity = 0, hasSpeechBoundaryEvents = false }) {
+/**
+ * Video-call interviewer. `mouthRef.current` ({ level, open, wide, round }) is
+ * updated from the voice audio for lip-sync; without it, browser-speech word
+ * timing drives a simpler mouth. A realistic avatar at /avatars/interviewer.glb
+ * (ARKit blendshapes, optional Oculus visemes) replaces the built-in face.
+ */
+export default function InterviewerAvatar({ state = "idle", speechActivity = 0, hasSpeechBoundaryEvents = false, mouthRef = null }) {
   const canvasRef = useRef(null);
+  const externalMouthRef = useRef(mouthRef);
+  externalMouthRef.current = mouthRef;
   const stateRef = useRef(state);
   const speechActivityRef = useRef(speechActivity);
   const speechBoundaryRef = useRef(hasSpeechBoundaryEvents);
@@ -147,6 +158,16 @@ export default function InterviewerAvatar({ state = "idle", speechActivity = 0, 
       const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.23, 0.58, 32), skin);
       neck.position.set(0, -0.1, 0.02);
       interviewer.add(neck);
+      // Everything above the neck lives in a head group pivoting at the neck.
+      const head = new THREE.Group();
+      head.position.set(0, 0.2, 0);
+      interviewer.add(head);
+      const headAdd = (mesh) => {
+        mesh.position.y -= 0.2;
+        interviewer.remove(mesh);
+        head.add(mesh);
+        return mesh;
+      };
       const face = new THREE.Mesh(createHeadGeometry(), skin);
       face.position.set(0, 0.73, 0.1);
       interviewer.add(face);
@@ -188,11 +209,33 @@ export default function InterviewerAvatar({ state = "idle", speechActivity = 0, 
         new THREE.CatmullRomCurve3([new THREE.Vector3(-0.32, 1.02, 0.59), new THREE.Vector3(-0.23, 1.055, 0.62), new THREE.Vector3(-0.13, 1.02, 0.60)]),
         new THREE.CatmullRomCurve3([new THREE.Vector3(0.13, 1.02, 0.60), new THREE.Vector3(0.23, 1.055, 0.62), new THREE.Vector3(0.32, 1.02, 0.59)]),
       ];
-      brows.forEach((curve) => interviewer.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 12, 0.026, 6, false), hair)));
+      const browMeshes = brows.map((curve) => {
+        const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 12, 0.026, 6, false), hair);
+        interviewer.add(mesh);
+        return mesh;
+      });
       addSphere(skin, [0, 0.57, 0.68], [0.07, 0.17, 0.13]);
       addSphere(skin, [-0.045, 0.49, 0.73], [0.065, 0.055, 0.08]);
+      // Mouth: dark opening, upper and lower lips, and corners that lift for a smile.
+      const lipMaterial = new THREE.MeshStandardMaterial({ color: 0xb06a62, roughness: 0.6 });
       const mouth = addSphere(mouthMaterial, [0, 0.23, 0.57], [0.09, 0.014, 0.018]);
-      addSphere(skin, [0, 0.19, 0.56], [0.075, 0.025, 0.025]);
+      const upperLip = addSphere(lipMaterial, [0, 0.245, 0.585], [0.088, 0.014, 0.02]);
+      const lowerLip = addSphere(lipMaterial, [0, 0.215, 0.58], [0.082, 0.017, 0.022]);
+      const corners = [
+        addSphere(lipMaterial, [-0.088, 0.232, 0.57], [0.014, 0.012, 0.012]),
+        addSphere(lipMaterial, [0.088, 0.232, 0.57], [0.014, 0.012, 0.012]),
+      ];
+      const chin = addSphere(skin, [0, 0.19, 0.56], [0.075, 0.025, 0.025]);
+      // Move all face parts into the head group (ears, hair, eyes, brows, nose, mouth).
+      [...interviewer.children].forEach((child) => {
+        if (child === head || child === torso || child === neck || child === leftLapel || child === rightLapel
+          || child === collarLeft || child === collarRight || child === tie || child.position.y < 0.05) return;
+        headAdd(child);
+      });
+      const base = new Map();
+      [mouth, upperLip, lowerLip, chin, ...corners, ...browMeshes, ...eyes, ...pupils, ...pupilCenters, ...eyeHighlights].forEach((mesh) => {
+        base.set(mesh, { position: mesh.position.clone(), scale: mesh.scale.clone() });
+      });
 
       const resize = () => {
         const width = Math.max(1, canvas.clientWidth);
@@ -221,35 +264,92 @@ export default function InterviewerAvatar({ state = "idle", speechActivity = 0, 
       const resumeRendering = () => {
         if (canRender() && frameId === undefined) frameId = window.requestAnimationFrame(animate);
       };
+      let expression = blendExpression(null, "idle", 1);
+      let mouthShape = { level: 0, open: 0, wide: 0, round: 0 };
+      let lastFrameAt = performance.now();
+      let realistic = null;
+      // Optional realistic avatar; the built-in face stays if none is installed.
+      loadRealisticAvatar({ scene, camera }).then((loaded) => {
+        if (!loaded) return;
+        realistic = loaded;
+        interviewer.visible = false;
+      }).catch(() => {});
+
       const animate = (now) => {
         if (now - lastRenderAt >= 33) {
           lastRenderAt = now;
+          const dt = Math.min(0.1, (now - lastFrameAt) / 1000);
+          lastFrameAt = now;
           const elapsed = (now - startedAt) / 1000;
           const currentState = stateRef.current;
-          interviewer.position.y = reducedMotion ? 0 : Math.sin(elapsed * 1.0) * 0.012;
-          interviewer.rotation.y = reducedMotion ? 0 : currentState === "thinking" ? Math.sin(elapsed * 0.6) * 0.04 : currentState === "listening" ? 0.012 : Math.sin(elapsed * 0.35) * 0.008;
-          const blink = !reducedMotion && elapsed % 5.1 > 4.96 && elapsed % 5.1 < 5.08;
-          eyes.forEach((eye) => { eye.scale.y = blink ? 0.004 : 0.038; });
-          pupils.forEach((pupil) => { pupil.scale.y = blink ? 0.002 : 0.031; });
-          pupilCenters.forEach((pupil) => { pupil.scale.y = blink ? 0.001 : 0.02; });
-          eyeHighlights.forEach((highlight) => { highlight.scale.y = blink ? 0.001 : 0.007; });
+
+          // Mouth shape: audio-driven when the natural voice provides it,
+          // otherwise word-boundary timing from browser speech.
+          const external = externalMouthRef.current?.current;
+          let target = { level: 0, open: 0, wide: 0, round: 0 };
           if (currentState === "speaking") {
-            const speechPulse = speechBoundaryRef.current
-              ? speechActivityRef.current
-              : reducedMotion ? 0.18 : 0.24 + Math.abs(Math.sin(elapsed * 9.5)) * 0.3;
-            mouth.scale.y = 0.012 + speechPulse * 0.055;
-            mouth.scale.x = 0.09 + speechPulse * 0.018;
-          } else {
-            mouth.scale.set(0.09, 0.014, 0.018);
+            if (external && external.level !== undefined && external.updatedAt > now - 250) target = external;
+            else {
+              const pulse = speechBoundaryRef.current ? speechActivityRef.current : reducedMotion ? 0.2 : 0.25 + Math.abs(Math.sin(elapsed * 9.5)) * 0.35;
+              target = { level: pulse, open: pulse, wide: 0.2 * pulse, round: 0.1 };
+            }
           }
-          if (currentState === "disconnected") {
-            skin.color.set(0xaaa39e);
-          hair.color.set(0x59514b);
+          mouthShape = {
+            level: approach(mouthShape.level, target.level, 18, dt),
+            open: approach(mouthShape.open, target.open, target.open > mouthShape.open ? 22 : 12, dt),
+            wide: approach(mouthShape.wide, target.wide, 14, dt),
+            round: approach(mouthShape.round, target.round, 14, dt),
+          };
+          expression = blendExpression(expression, currentState, dt);
+          const blink = reducedMotion ? 0 : blinkAmount(elapsed);
+          const gaze = reducedMotion ? { x: 0, y: 0 } : gazeAt(elapsed, currentState);
+          const motion = headMotion(elapsed, currentState, mouthShape.level, reducedMotion);
+          const breathing = reducedMotion ? 0 : breath(elapsed);
+
+          if (realistic) {
+            realistic.update({ mouth: mouthShape, blink, gaze, expression, motion, breathing, disconnected: currentState === "disconnected" });
+            renderer.render(scene, camera);
           } else {
-            skin.color.set(0xe3b69b);
-            hair.color.set(0x493326);
+            interviewer.position.y = breathing * 0.008;
+            torso.scale.y = 1 + breathing * 0.012;
+            head.rotation.set(-motion.pitch, motion.yaw, motion.roll);
+            interviewer.rotation.y = motion.yaw * 0.3;
+
+            const set = (mesh, dx, dy, sx, sy) => {
+              const original = base.get(mesh);
+              mesh.position.set(original.position.x + dx, original.position.y + dy, original.position.z);
+              mesh.scale.set(original.scale.x * sx, original.scale.y * sy, original.scale.z);
+            };
+            const open = mouthShape.open;
+            const width = 1 + mouthShape.wide * 0.25 - mouthShape.round * 0.3 + expression.smile * 0.12;
+            set(mouth, 0, -open * 0.012, width, 1 + open * 4.5);
+            set(upperLip, 0, open * 0.004, width, 1 + mouthShape.round * 0.4);
+            set(lowerLip, 0, -open * 0.03, width * 0.97, 1 + mouthShape.round * 0.4);
+            set(chin, 0, -open * 0.03, 1, 1);
+            corners.forEach((corner, index) => {
+              const side = index === 0 ? -1 : 1;
+              set(corner, side * (width - 1) * 0.088, expression.smile * 0.016 - open * 0.006, 1, 1);
+            });
+            browMeshes.forEach((brow, index) => {
+              const side = index === 0 ? -1 : 1;
+              set(brow, side * expression.browFrown * -0.012, expression.browRaise * 0.03 - expression.browFrown * 0.012, 1, 1);
+              brow.rotation.z = side * (expression.browFrown * 0.12 - expression.browRaise * 0.05);
+            });
+            const eyeOpen = Math.max(0.04, 1 - blink) * (1 + expression.eyeWide * 0.15);
+            [eyes, pupils, pupilCenters, eyeHighlights].forEach((group) => group.forEach((mesh) => {
+              const gazeShift = group === eyes ? 0 : 1;
+              set(mesh, gaze.x * 0.022 * gazeShift, gaze.y * 0.012 * gazeShift, 1, eyeOpen);
+            }));
+
+            if (currentState === "disconnected") {
+              skin.color.set(0xaaa39e);
+              hair.color.set(0x59514b);
+            } else {
+              skin.color.set(0xe3b69b);
+              hair.color.set(0x493326);
+            }
+            renderer.render(scene, camera);
           }
-          renderer.render(scene, camera);
         }
         if (canRender()) frameId = window.requestAnimationFrame(animate);
       };
@@ -278,6 +378,7 @@ export default function InterviewerAvatar({ state = "idle", speechActivity = 0, 
         intersectionObserver?.disconnect();
         document.removeEventListener("visibilitychange", resumeRendering);
         pauseRendering();
+        realistic?.dispose?.();
         scene.traverse((object) => {
           if (object.geometry) object.geometry.dispose();
           if (object.material) {

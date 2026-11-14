@@ -6,8 +6,25 @@ import DonutScore from "../components/ui/DonutScore.jsx";
 import PageHeader from "../components/ui/PageHeader.jsx";
 import { recordConsent } from "../api/accountApi.js";
 import { getErrorMessage } from "../utils/errorMessage.js";
+import { useAuth } from "../auth/AuthContext.jsx";
+import { ROLE_SUGGESTIONS, SCORE_CATEGORIES } from "../utils/resumeContent.js";
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="rounded-full border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-700 hover:border-stone-950"
+      onClick={() => navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {})}
+      type="button"
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
 
 export default function ResumeOptimizerPage() {
+  const { user } = useAuth();
+  const roleSuggestions = ROLE_SUGGESTIONS[user?.department] ?? ROLE_SUGGESTIONS.default;
   const [resumes, setResumes] = useState([]);
   const [form, setForm] = useState({
     resume_id: "",
@@ -125,10 +142,15 @@ export default function ResumeOptimizerPage() {
               <input
                 className="mt-2 w-full rounded-lg border border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-800 outline-none transition focus:border-teal-600 focus:bg-white"
                 name="target_role"
-                placeholder="Frontend Engineer"
+                placeholder={roleSuggestions[0]}
                 value={form.target_role}
                 onChange={updateField}
               />
+              <span className="mt-2 flex flex-wrap gap-2" aria-label="Suggested roles">
+                {roleSuggestions.map((role) => (
+                  <button className={`rounded-full border px-3 py-1 text-xs font-semibold ${form.target_role === role ? "border-teal-600 bg-teal-50 text-teal-800" : "border-stone-300 text-stone-600 hover:border-stone-950"}`} key={role} onClick={() => setForm((current) => ({ ...current, target_role: role }))} type="button">{role}</button>
+                ))}
+              </span>
             </label>
 
             <label className="block">
@@ -179,7 +201,7 @@ export default function ResumeOptimizerPage() {
         <section className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
           {!result ? (
             <div className="rounded-lg border border-dashed border-stone-300 p-8 text-sm text-stone-600">
-              Run the optimizer to see ATS score, keyword gaps, rewritten bullets, and a tailored summary.
+              Pick a role (or paste a job description) and run the optimizer to see measured scores, keyword gaps, bullet-by-bullet improvements, and a tailored summary.
             </div>
           ) : (
             <div className="space-y-6">
@@ -192,6 +214,51 @@ export default function ResumeOptimizerPage() {
                   <p className="mt-3 text-sm leading-7 text-stone-700">{result.result.optimized_summary}</p>
                 </div>
               </div>
+
+              {result.result.analysis_version ? (
+                <section className="rounded-lg border border-stone-200 p-4">
+                  <p className="text-sm font-bold uppercase tracking-wide text-stone-700">Score breakdown</p>
+                  <p className="mt-1 text-xs text-stone-500">Measured from your resume's content (action verbs, measurable results, sections, and skill evidence). These are coaching heuristics, not how any specific company's system will score you.</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {SCORE_CATEGORIES.filter(([key]) => result.result.score_breakdown?.[key]).map(([key, label]) => {
+                      const category = result.result.score_breakdown[key];
+                      const score = Math.round(category.score ?? 0);
+                      return (
+                        <div className="rounded-lg bg-stone-50 p-3" key={key}>
+                          <div className="flex items-center justify-between text-sm font-semibold"><span>{label}</span><span>{score}/100</span></div>
+                          <div aria-hidden="true" className="mt-2 h-2 overflow-hidden rounded-full bg-stone-200"><div className={`h-full rounded-full ${score >= 70 ? "bg-teal-600" : score >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${score}%` }} /></div>
+                          <p className="mt-2 text-xs leading-5 text-stone-600">{category.recommendations?.[0]}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
+
+              {result.result.bullet_improvements?.length ? (
+                <section className="rounded-lg border border-stone-200 p-4">
+                  <p className="text-sm font-bold uppercase tracking-wide text-stone-700">Bullet points to strengthen</p>
+                  <p className="mt-1 text-xs text-stone-500">Suggestions keep your facts. Replace any [placeholder] with a real number or result, or remove it if you don't have one.</p>
+                  <ul className="mt-3 space-y-3">
+                    {result.result.bullet_improvements.map((item) => (
+                      <li className="rounded-lg bg-stone-50 p-3 text-sm" key={item.original}>
+                        <p className="text-xs font-semibold text-stone-500">{item.entry} · {item.issues.join(", ")}</p>
+                        <p className="mt-1 text-stone-500 line-through decoration-stone-300">{item.original}</p>
+                        <div className="mt-1 flex items-start justify-between gap-3"><p className="text-stone-900">{item.suggestion}</p><CopyButton text={item.suggestion} /></div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
+              {result.result.matched_keywords?.length ? (
+                <section className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                  <p className="text-sm font-bold uppercase tracking-wide text-teal-700">Keywords you already show</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {result.result.matched_keywords.map((keyword) => <span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-800" key={keyword}>{keyword}</span>)}
+                  </div>
+                </section>
+              ) : null}
 
               <div className="grid gap-4 lg:grid-cols-2">
                 <section className="rounded-lg border border-stone-200 bg-stone-50 p-4">
@@ -213,7 +280,7 @@ export default function ResumeOptimizerPage() {
               </div>
 
               <section className="rounded-lg border border-stone-200 bg-stone-50 p-4">
-                <p className="text-sm font-bold uppercase tracking-wide text-stone-700">Suggested keywords</p>
+                <p className="text-sm font-bold uppercase tracking-wide text-stone-700">Keywords to add (only if true for you)</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {result.result.suggested_keywords.map((keyword) => (
                     <span

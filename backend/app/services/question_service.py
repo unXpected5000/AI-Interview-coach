@@ -1,28 +1,123 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import random
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from app.ai.llm_client import LLMClient, LLMClientError
 from app.ai.prompts import QUESTION_GENERATION_PROMPT
 from app.utils.mongo import make_json_safe
 
-
-QUESTION_TYPES = ("conceptual", "practical", "scenario")
+QUESTION_TYPES = ("introduction", "conceptual", "practical", "scenario", "behavioral", "closing")
+# Types scored with the communication/STAR rubric instead of technical depth.
+CONVERSATIONAL_TYPES = {"introduction", "behavioral", "situational", "closing"}
 QUESTION_DIFFICULTIES = {"low", "medium", "hard", "interview_ready", "easy"}
-QUESTION_TYPE_SEQUENCE = [
-    "conceptual",
-    "practical",
-    "scenario",
-    "conceptual",
-    "practical",
-    "scenario",
-    "conceptual",
-    "practical",
-    "scenario",
-    "practical",
+
+# The shape of a real interview: open, go deep on real work, test skills,
+# problem-solve, check teamwork and resilience, then close.
+INTERVIEW_ARC: list[dict[str, str]] = [
+    {"slot": "introduction", "question_type": "introduction"},
+    {"slot": "deep_dive", "question_type": "practical"},
+    {"slot": "decision", "question_type": "practical"},
+    {"slot": "second_experience", "question_type": "practical"},
+    {"slot": "skill_applied", "question_type": "practical"},
+    {"slot": "scenario", "question_type": "scenario"},
+    {"slot": "skill_depth", "question_type": "conceptual"},
+    {"slot": "teamwork", "question_type": "behavioral"},
+    {"slot": "setback", "question_type": "behavioral"},
+    {"slot": "closing", "question_type": "closing"},
 ]
+
+DEPARTMENT_FIELDS = {
+    "ai and ds": "AI and data science",
+    "comps": "computer engineering",
+    "it": "information technology",
+    "mechatronics": "mechatronics",
+    "elx": "electronics",
+    "extc": "electronics and telecommunication",
+    "mech": "mechanical engineering",
+    "civil": "civil engineering",
+}
+
+# Realistic, open-ended problems an interviewer in each field might pose.
+DEPARTMENT_SCENARIOS = {
+    "ai and ds": [
+        ("A model you trained looks great in testing, but accuracy drops a lot once it's used on real data. How would you figure out what's going on?",
+         ["check for data drift or distribution shift", "compare training and production data", "look for leakage or overfitting", "monitoring and retraining plan"]),
+        ("You're given a messy dataset with missing values and duplicates a day before a deadline. How do you decide what to clean and what to leave?",
+         ["prioritise issues by impact", "handling missing values", "deduplication approach", "communicating trade-offs"]),
+    ],
+    "comps": [
+        ("Something you shipped is suddenly slow for some users but fine for others. How would you track down the cause?",
+         ["reproduce and narrow the scope", "logs, metrics or profiling", "form and test hypotheses", "fix and prevent regression"]),
+        ("You join a project with a large codebase and no documentation. How do you get productive quickly?",
+         ["read code paths that matter", "run and debug locally", "ask focused questions", "document as you learn"]),
+    ],
+    "it": [
+        ("A web application your team runs goes down during peak hours. Walk me through what you'd do in the first thirty minutes.",
+         ["triage and communicate", "check monitoring and recent changes", "restore service first", "root cause and follow-up"]),
+        ("A user reports they can see data that isn't theirs. How would you respond?",
+         ["treat it as a security incident", "contain access", "investigate the access control bug", "notify and fix"]),
+    ],
+    "mechatronics": [
+        ("A robotic arm prototype keeps overshooting its target position. How would you diagnose and fix it?",
+         ["check sensors and feedback", "tune the controller", "mechanical play or backlash", "test methodically"]),
+        ("Your sensor readings are noisy and the control loop is unstable. What would you look at first?",
+         ["signal filtering", "sampling rate and timing", "grounding and wiring", "controller gains"]),
+    ],
+    "elx": [
+        ("A circuit works on the bench but fails intermittently once it's installed. How would you troubleshoot it?",
+         ["reproduce conditions", "power supply and noise", "connections and temperature", "measure with proper instruments"]),
+        ("You need to cut the power consumption of a battery-powered device in half. Where would you start?",
+         ["measure where power goes", "sleep modes", "component choices", "duty cycling"]),
+    ],
+    "extc": [
+        ("Users in one area report poor signal and dropped connections. How would you approach diagnosing it?",
+         ["gather data on location and time", "check interference and coverage", "antenna and link budget", "propose and verify a fix"]),
+        ("A communication link has a higher error rate than expected. How would you find the cause?",
+         ["measure signal to noise ratio", "check modulation and coding", "interference sources", "test changes"]),
+    ],
+    "mech": [
+        ("A part you designed is failing earlier than expected during testing. How would you investigate?",
+         ["inspect the failure mode", "revisit loads and assumptions", "material and manufacturing checks", "analysis or simulation and redesign"]),
+        ("You're asked to reduce the cost of a component without hurting its performance. How do you approach it?",
+         ["understand functional requirements", "material and process alternatives", "design for manufacturing", "validate the change"]),
+    ],
+    "civil": [
+        ("During construction you notice cracks in a recently cast slab. What would you do?",
+         ["assess severity and safety", "identify likely causes", "consult and document", "repair and prevention"]),
+        ("A project is running behind schedule and over budget. How would you help get it back on track?",
+         ["find the critical path", "reallocate resources", "communicate with stakeholders", "control changes"]),
+    ],
+}
+GENERIC_SCENARIOS = [
+    ("You're halfway through a project and realise the approach you chose isn't going to work. What do you do?",
+     ["recognise it early", "evaluate alternatives", "communicate with the team", "adjust the plan"]),
+]
+
+TRANSITIONS = {
+    "introduction": ["Let's start with you.", "To begin,", "Let's kick things off."],
+    "deep_dive": ["I'd like to dig into your experience a bit.", "Let's talk about some of the work on your resume.", "Something on your resume caught my eye."],
+    "decision": ["Staying with that for a moment,", "I'd like to go a little deeper there.", "Building on that,"],
+    "second_experience": ["Let's look at another part of your background.", "Moving on to something else you've done,", "I also wanted to ask about this."],
+    "skill_applied": ["Let's switch to your technical skills.", "Shifting to the technical side,", "I'd like to talk about your skills."],
+    "scenario": ["Let me give you a situation.", "Here's a hypothetical for you.", "Let's try a problem-solving question."],
+    "skill_depth": ["A bit more technical now.", "Let's go one level deeper.", "One more technical question."],
+    "teamwork": ["Let's talk about working with others.", "Switching to teamwork,", "I'd like to hear about collaboration."],
+    "setback": ["Next, about handling challenges.", "Let's talk about a tougher moment.", "Shifting gears a little,"],
+    "closing": ["We're almost done.", "To wrap up,", "Last question from me."],
+}
+
+
+# Everyday office tools are not "technical work" worth a deep-dive decision question.
+GENERIC_TOOLS = {"excel", "microsoft office", "ms office", "office", "google workspace", "word", "powerpoint", "google docs", "google sheets"}
+
+
+def _department_key(department: str | None) -> str:
+    return str(department or "").strip().lower()
 
 
 class QuestionService:
@@ -30,13 +125,25 @@ class QuestionService:
         self.llm_client = llm_client
 
     async def generate_questions(self, resume: dict[str, Any], interview_context: dict[str, Any] | None = None) -> list[dict]:
+        interview_context = dict(interview_context or {})
         structured_resume = resume.get("structured_resume") or {}
-        skills = self._unique_strings(
-            list(resume.get("extracted_skills", []))
-            + list(structured_resume.get("skills", []))
-            + list(structured_resume.get("tools", []))
+        skills = list(resume.get("extracted_skills", []))
+        raw_text = resume.get("raw_text")
+        if raw_text:
+            # Re-parse with the current parser so older uploads benefit from
+            # improved extraction without a new upload.
+            from app.services.resume_parser_service import ResumeParserService
+            from app.services.skill_service import SkillService
+
+            structured_resume = ResumeParserService().parse(raw_text)
+            skills = SkillService().extract_skills(raw_text, structured_resume)
+        skills = self._unique_strings(skills + list(structured_resume.get("skills", [])) + list(structured_resume.get("tools", [])))
+        seed_source = f"{resume.get('_id', '')}:{datetime.now(timezone.utc).isoformat()}"
+        rng = random.Random(int(hashlib.sha256(seed_source.encode()).hexdigest()[:12], 16))
+        topic_plan = self._build_topic_plan(
+            structured_resume, skills, interview_context.get("difficulty", "medium"),
+            candidate=interview_context.get("candidate") or {}, rng=rng,
         )
-        topic_plan = self._build_topic_plan(structured_resume, skills, (interview_context or {}).get("difficulty", "medium"))
         prompt = self._build_prompt(structured_resume, skills, topic_plan, interview_context)
 
         try:
@@ -71,19 +178,13 @@ class QuestionService:
         requested_difficulty = target_difficulty or self.difficulty_for_score(score)
         difficulty = "easy" if requested_difficulty == "low" else requested_difficulty
         prompt = (
-            "Rewrite the next interview question for the requested difficulty, using the candidate's prior answer "
-            "to choose a useful level of challenge. Return one strict JSON object with keys question, expected_answer, "
-            "expected_points (array of strings), and question_type. Keep the original topic and assess the requested "
-            "difficulty. Do not answer the question.\n\n"
-            + json.dumps(
-                {
-                    "difficulty": difficulty,
-                    "next_question": question,
-                    "previous_answer": answer_text[:3000],
-                },
-                ensure_ascii=False,
-            )
+            "You are a friendly, experienced interviewer. Rewrite the next interview question at the requested "
+            "difficulty, keeping its topic. It is read aloud, so use one or two short spoken sentences, ask one "
+            "thing, and avoid trivia. Return one strict JSON object with keys question, transition (a short "
+            "spoken lead-in), expected_answer, expected_points (array of strings), and question_type.\n\n"
+            + json.dumps({"difficulty": difficulty, "next_question": question, "previous_answer": answer_text[:3000]}, ensure_ascii=False)
         )
+        transition = ""
         try:
             parsed = self.llm_client.parse_json(await self.llm_client.generate(prompt))
             if not isinstance(parsed, dict):
@@ -91,21 +192,22 @@ class QuestionService:
             text = str(parsed.get("question", "")).strip()
             expected = str(parsed.get("expected_answer", "")).strip()
             points = self._normalize_list(parsed.get("expected_points", []))
+            transition = str(parsed.get("transition", "")).strip()[:160]
             if not text or not expected or not points:
                 raise ValueError("Adaptive question response was incomplete.")
         except (LLMClientError, ValueError, json.JSONDecodeError):
             text, expected, points = self._adaptive_fallback(question, difficulty)
 
         adapted = dict(question)
-        adapted.update(
-            {
-                "difficulty": requested_difficulty,
-                "question": text,
-                "expected_answer": expected,
-                "expected_points": points,
-                "key_points": points,
-            }
-        )
+        adapted.update({
+            "difficulty": requested_difficulty,
+            "question": text,
+            "expected_answer": expected,
+            "expected_points": points,
+            "key_points": points,
+        })
+        if transition:
+            adapted["transition"] = transition
         return adapted
 
     async def generate_follow_up(
@@ -120,21 +222,22 @@ class QuestionService:
         requested_difficulty = target_difficulty or ("easy" if score < 50 else "hard")
         difficulty = "easy" if requested_difficulty == "low" else requested_difficulty
         prompt = (
-            "Create one concise, specific follow-up interview question based on the prior question and answer. "
-            "For an easy follow-up, clarify a missing fundamental. For a hard follow-up, probe a trade-off, edge case, "
-            "or deeper reasoning. Return strict JSON with question, expected_answer, and expected_points (array of strings). "
-            "Do not repeat the original question.\n\n"
-            + json.dumps(
-                {
-                    "difficulty": difficulty,
-                    "question": question.get("question", ""),
-                    "topic": question.get("topic_focus", question.get("skill", "the topic")),
-                    "answer": answer_text[:3000],
-                    "missing_points": evaluation.get("missing_points", []),
-                },
-                ensure_ascii=False,
-            )
+            "You are a supportive, experienced interviewer. Ask ONE natural follow-up question that responds to "
+            "what the candidate actually said. If the answer was weak (easy), help them by narrowing to a concrete, "
+            "answerable part or asking for an example; never quiz on trivia. If it was strong (hard), probe a "
+            "trade-off, decision, or result they mentioned. It is spoken aloud: one or two short sentences, and "
+            "start with a brief natural acknowledgement in 'transition' (for example 'Interesting.' or 'Okay.'). "
+            "Return strict JSON with question, transition, expected_answer, expected_points (array). Do not repeat "
+            "the original question.\n\n"
+            + json.dumps({
+                "difficulty": difficulty,
+                "question": question.get("question", ""),
+                "topic": question.get("topic_focus", question.get("skill", "the topic")),
+                "answer": answer_text[:3000],
+                "missing_points": evaluation.get("missing_points", []),
+            }, ensure_ascii=False)
         )
+        transition = ""
         try:
             parsed = self.llm_client.parse_json(await self.llm_client.generate(prompt))
             if not isinstance(parsed, dict):
@@ -142,19 +245,22 @@ class QuestionService:
             text = str(parsed.get("question", "")).strip()
             expected = str(parsed.get("expected_answer", "")).strip()
             points = self._normalize_list(parsed.get("expected_points", []))
+            transition = str(parsed.get("transition", "")).strip()[:160]
             if not text or not expected or not points:
                 raise ValueError("Follow-up response was incomplete.")
         except (LLMClientError, ValueError, json.JSONDecodeError):
             text, expected, points = self._follow_up_fallback(question, evaluation, difficulty)
+            transition = "Okay, let me ask about that a little differently." if difficulty == "easy" else "That's interesting."
 
         return {
             "question_id": question_id,
             "skill": question.get("skill", "General"),
             "difficulty": requested_difficulty,
-            "question_type": "scenario" if difficulty == "hard" else "conceptual",
+            "question_type": "scenario" if difficulty == "hard" else "practical",
             "topic_focus": question.get("topic_focus", question.get("skill", "General")),
             "source_section": question.get("source_section", "skills"),
             "question": text,
+            "transition": transition,
             "expected_answer": expected,
             "expected_points": points,
             "key_points": points,
@@ -166,9 +272,9 @@ class QuestionService:
         existing = str(question.get("question", "Explain this topic."))
         points = self._normalize_list(question.get("expected_points", question.get("key_points", [])))
         if difficulty == "easy":
-            text = f"Could you explain the main idea behind {topic} step by step?"
+            text = f"Let's keep it practical: can you walk me through how you've used {topic}, step by step?"
         elif difficulty == "hard":
-            text = f"What trade-offs and edge cases would you consider when applying {topic}?"
+            text = f"When you work with {topic}, what trade-offs do you weigh, and where have you seen an approach break down?"
         else:
             text = existing
         expected = str(question.get("expected_answer", "Explain the approach, reasoning, and outcome."))
@@ -183,11 +289,11 @@ class QuestionService:
         topic = question.get("topic_focus", question.get("skill", "this topic"))
         points = self._normalize_list(evaluation.get("missing_points", []))
         if difficulty == "easy":
-            focus = points[0] if points else f"your use of {topic}"
-            text = f"Could you clarify {focus} with a simple example?"
+            focus = points[0] if points else f"your work with {topic}"
+            text = f"Could you tell me about {focus}? A small, concrete example is perfect."
             expected_points = points or [f"Give a clear example related to {topic}"]
         else:
-            text = f"What trade-off or edge case could change your approach to {topic}?"
+            text = f"You clearly know {topic}. What's a decision there you'd make differently today, and why?"
             expected_points = self._normalize_list(question.get("expected_points", [])) or [
                 f"Discuss a trade-off or edge case for {topic}"
             ]
@@ -196,219 +302,146 @@ class QuestionService:
 
     def _build_prompt(self, structured_resume: dict[str, Any], skills: list[str], topic_plan: list[dict], interview_context: dict[str, Any] | None) -> str:
         resume_context = {
-            "education": structured_resume.get("education", []),
-            "projects": structured_resume.get("projects", []),
-            "internships": structured_resume.get("internships", []),
-            "experience": structured_resume.get("experience", []),
-            "skills": structured_resume.get("skills", []),
-            "certifications": structured_resume.get("certifications", []),
-            "tools": structured_resume.get("tools", []),
-            "summary_lines": structured_resume.get("summary_lines", []),
+            key: structured_resume.get(key, [])
+            for key in ("education", "experience", "internships", "projects", "skills", "tools", "certifications", "achievements", "activities", "summary_lines")
         }
+        # Raw "raw_text" fields are redundant with the structured fields; drop them to keep the prompt focused.
+        for key in ("experience", "internships", "projects"):
+            resume_context[key] = [{k: v for k, v in item.items() if k != "raw_text"} for item in resume_context[key]]
+        plan = [{k: v for k, v in item.items() if k not in {"technologies", "highlights"}} for item in topic_plan]
         payload = {
             "skills": skills,
-            "topic_plan": topic_plan,
+            "interview_plan": plan,
             "resume_context": resume_context,
-            "interview_context": interview_context or {},
+            "interview_context": {k: v for k, v in (interview_context or {}).items() if k != "seed"},
         }
-        return f"{QUESTION_GENERATION_PROMPT}\n\nResume context:\n{json.dumps(make_json_safe(payload), indent=2)}"
+        return f"{QUESTION_GENERATION_PROMPT}\n\nInterview data:\n{json.dumps(make_json_safe(payload), indent=2)}"
 
-    def _build_topic_plan(self, structured_resume: dict[str, Any], skills: list[str], difficulty: str = "medium") -> list[dict[str, Any]]:
-        candidates: list[dict[str, Any]] = []
+    # ------------------------------------------------------------ planning
 
-        for project in structured_resume.get("projects", []):
-            topic = self._topic_label(project.get("name"), project.get("description"), "Project")
-            candidates.append(
-                {
-                    "topic_focus": topic,
-                    "source_section": "projects",
-                    "skill": self._first_non_empty(project.get("technologies", []) or skills, default="Project delivery"),
-                    "context": project.get("description", ""),
-                    "technologies": project.get("technologies", []),
-                    "highlights": project.get("highlights", []),
-                }
-            )
+    @staticmethod
+    def _technical(technologies: list[str]) -> list[str]:
+        return [tech for tech in technologies if str(tech).strip().lower() not in GENERIC_TOOLS]
 
-        for internship in structured_resume.get("internships", []):
-            topic = self._topic_label(internship.get("title"), internship.get("company"), "Internship")
-            candidates.append(
-                {
-                    "topic_focus": topic,
-                    "source_section": "internships",
-                    "skill": self._first_non_empty(internship.get("technologies", []) or skills, default="Experience"),
-                    "context": internship.get("description", ""),
-                    "technologies": internship.get("technologies", []),
-                    "highlights": internship.get("highlights", []),
-                }
-            )
+    def _entries(self, structured_resume: dict[str, Any]) -> list[dict[str, Any]]:
+        """Projects and roles, most technical and substantial first."""
+        entries: list[dict[str, Any]] = []
+        for project in structured_resume.get("projects", []) or []:
+            name = self._clean_text(str(project.get("name", "")))
+            if name:
+                entries.append({"kind": "project", "label": name, "org": project.get("context", ""), "section": "projects",
+                                "technologies": project.get("technologies", []), "highlights": project.get("highlights", []),
+                                "context": project.get("description", "")})
+        for section in ("experience", "internships"):
+            for item in structured_resume.get(section, []) or []:
+                title = self._clean_text(str(item.get("title", "")))
+                org = self._clean_text(str(item.get("company", "")))
+                if title or org:
+                    entries.append({"kind": item.get("kind", "work" if section == "experience" else "internship"),
+                                    "label": title or org, "org": org, "section": section,
+                                    "technologies": item.get("technologies", []), "highlights": item.get("highlights", []),
+                                    "context": item.get("description", "")})
+        for entry in entries:
+            entry["technologies"] = self._technical(entry["technologies"])
+        # Technical work first (projects, then roles using technical tools, then
+        # research); unrelated jobs last.
+        def rank(entry: dict[str, Any]) -> tuple[int, int]:
+            score = 3 if entry["kind"] == "project" else 0
+            score += 2 if entry["technologies"] else 0
+            score += 1 if entry["kind"] == "research" else 0
+            return (-score, -len(entry["highlights"]))
+        return sorted(entries, key=rank)
 
-        for experience in structured_resume.get("experience", []):
-            topic = self._topic_label(experience.get("title"), experience.get("company"), "Experience")
-            candidates.append(
-                {
-                    "topic_focus": topic,
-                    "source_section": "experience",
-                    "skill": self._first_non_empty(experience.get("technologies", []) or skills, default="Delivery"),
-                    "context": experience.get("description", ""),
-                    "technologies": experience.get("technologies", []),
-                    "highlights": experience.get("highlights", []),
-                }
-            )
+    def _build_topic_plan(
+        self,
+        structured_resume: dict[str, Any],
+        skills: list[str],
+        difficulty: str = "medium",
+        candidate: dict[str, Any] | None = None,
+        rng: random.Random | None = None,
+    ) -> list[dict[str, Any]]:
+        rng = rng or random.Random(0)
+        candidate = candidate or {}
+        department = _department_key(candidate.get("department"))
+        field = DEPARTMENT_FIELDS.get(department, "your field")
+        entries = self._entries(structured_resume)
+        # Resume skills first, then general topics so a thin resume still gets distinct questions.
+        skill_pool = self._unique_strings(skills + ["problem solving", "learning new tools", "time management", "technical communication", "attention to detail"])
+        used_skills: set[str] = set()
 
-        for skill in structured_resume.get("skills", []):
-            candidates.append(
-                {
-                    "topic_focus": skill,
-                    "source_section": "skills",
-                    "skill": skill,
-                    "context": f"Skill claimed in the resume: {skill}",
-                    "technologies": [],
-                    "highlights": [],
-                }
-            )
+        def take_skill(preferred: list[str] | None = None) -> str:
+            for skill in (preferred or []) + skill_pool:
+                if self._normalize_key(skill) not in used_skills:
+                    used_skills.add(self._normalize_key(skill))
+                    return skill
+            return f"topic {len(used_skills) + 1}"
 
-        for tool in structured_resume.get("tools", []):
-            candidates.append(
-                {
-                    "topic_focus": tool,
-                    "source_section": "tools",
-                    "skill": tool,
-                    "context": f"Tool or platform mentioned in the resume: {tool}",
-                    "technologies": [],
-                    "highlights": [],
-                }
-            )
-
-        for certification in structured_resume.get("certifications", []):
-            candidates.append(
-                {
-                    "topic_focus": certification,
-                    "source_section": "certifications",
-                    "skill": certification,
-                    "context": certification,
-                    "technologies": [],
-                    "highlights": [],
-                }
-            )
-
-        for education in structured_resume.get("education", []):
-            topic = education.get("degree") or education.get("institution") or education.get("text") or "Education"
-            candidates.append(
-                {
-                    "topic_focus": topic,
-                    "source_section": "education",
-                    "skill": topic,
-                    "context": education.get("text", ""),
-                    "technologies": [],
-                    "highlights": [],
-                }
-            )
-
-        if not candidates:
-            candidates = [
-                {
-                    "topic_focus": skill,
-                    "source_section": "skills",
-                    "skill": skill,
-                    "context": skill,
-                    "technologies": [],
-                    "highlights": [],
-                }
-                for skill in (skills or ["Python", "REST APIs", "MongoDB", "React"])
-            ]
-
-        candidates = self._expand_candidates(candidates, skills)
+        first = entries[0] if entries else None
+        second = entries[1] if len(entries) > 1 else None
+        scenarios = list(DEPARTMENT_SCENARIOS.get(department, [])) + GENERIC_SCENARIOS
+        scenario_text, scenario_points = scenarios[rng.randrange(len(scenarios))]
+        education = (structured_resume.get("education") or [{}])[0]
+        degree = self._clean_text(str(education.get("degree") or "")) or field
 
         plan: list[dict[str, Any]] = []
-        used_topics: set[str] = set()
-        for index in range(10):
-            question_difficulty = difficulty if difficulty in QUESTION_DIFFICULTIES else "medium"
-            if question_difficulty == "interview_ready":
-                question_difficulty = ("medium", "medium", "medium", "low", "medium", "hard", "medium", "low", "hard", "medium")[index]
-            candidate = self._next_candidate(candidates, used_topics, index)
-            question_type = QUESTION_TYPE_SEQUENCE[index]
-            plan.append(
-                {
-                    "question_id": index + 1,
-                    "difficulty": question_difficulty,
-                    "question_type": question_type,
-                    "topic_focus": candidate["topic_focus"],
-                    "source_section": candidate["source_section"],
-                    "skill": candidate["skill"],
-                    "context": candidate.get("context", ""),
-                    "technologies": candidate.get("technologies", []),
-                    "highlights": candidate.get("highlights", []),
-                }
-            )
+        for index, arc in enumerate(INTERVIEW_ARC):
+            slot = arc["slot"]
+            item: dict[str, Any] = {"question_id": index + 1, "question_type": arc["question_type"], "slot": slot,
+                                    "technologies": [], "highlights": [], "context": "", "anchor": ""}
+            if slot == "introduction":
+                item.update(topic_focus="Background and motivation", source_section="summary", skill="Communication",
+                            context=f"Studying {degree}" + (f", year {candidate.get('year')}" if candidate.get("year") else ""))
+            elif slot in {"deep_dive", "decision"} and first:
+                skill = take_skill(first["technologies"]) if slot == "decision" else (first["technologies"][0] if first["technologies"] else "Project work")
+                item.update(topic_focus=f"{first['label']}" + (" — key decision" if slot == "decision" else ""), source_section=first["section"],
+                            skill=skill, anchor=first["label"], org=first["org"], kind=first["kind"],
+                            technologies=first["technologies"], highlights=first["highlights"], context=first["context"][:400])
+            elif slot == "second_experience" and second:
+                item.update(topic_focus=second["label"], source_section=second["section"],
+                            skill=second["technologies"][0] if second["technologies"] else "Experience",
+                            anchor=second["label"], org=second["org"], kind=second["kind"],
+                            technologies=second["technologies"], highlights=second["highlights"], context=second["context"][:400])
+            elif slot == "scenario":
+                item.update(topic_focus="Problem-solving scenario", source_section="scenario", skill="Problem solving",
+                            context=scenario_text, scenario_points=scenario_points)
+            elif slot == "teamwork":
+                team_entry = next((entry for entry in entries if re.search(r"team|led|collaborat|group", " ".join(entry["highlights"]), re.I)), None)
+                item.update(topic_focus="Teamwork", source_section="behavioral", skill="Collaboration",
+                            anchor=(team_entry["org"] or team_entry["label"]) if team_entry else "")
+            elif slot == "setback":
+                item.update(topic_focus="Handling setbacks", source_section="behavioral", skill="Resilience")
+            elif slot == "closing":
+                item.update(topic_focus="Goals and motivation", source_section="summary", skill="Motivation", context=field)
+            else:
+                # Skill slots, and fallbacks for missing projects or experience.
+                skill = take_skill()
+                item.update(topic_focus=f"{skill} in practice" if slot != "skill_depth" else f"{skill} fundamentals",
+                            source_section="skills", skill=skill, anchor=skill,
+                            question_type="practical" if slot != "skill_depth" else "conceptual")
+            item["difficulty"] = self._slot_difficulty(difficulty, index, item["question_type"])
+            item["transition"] = rng.choice(TRANSITIONS.get(slot, [""]))
+            plan.append(item)
 
+        # Topics must be unique for validation and variety.
+        seen: set[str] = set()
+        for item in plan:
+            key = self._normalize_key(item["topic_focus"])
+            if key in seen:
+                skill = take_skill()
+                item.update(topic_focus=f"{skill} in practice", source_section="skills", skill=skill, anchor=skill, slot="skill_applied",
+                            question_type="practical")
+                key = self._normalize_key(item["topic_focus"])
+            seen.add(key)
         return plan
 
-    def _expand_candidates(self, candidates: list[dict[str, Any]], skills: list[str]) -> list[dict[str, Any]]:
-        unique: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for candidate in candidates:
-            key = self._normalize_key(candidate["topic_focus"])
-            if key and key not in seen:
-                seen.add(key)
-                unique.append(candidate)
-
-        source_skills = skills or ["Python", "REST APIs", "MongoDB", "React", "Testing"]
-        expansion_templates = [
-            ("fundamentals", "Explain the fundamentals of {topic}."),
-            ("implementation", "How would you implement {topic} in a real project?"),
-            ("tradeoffs", "What tradeoffs matter when using {topic}?"),
-            ("scaling", "How would you scale or harden {topic}?"),
-            ("debugging", "How would you debug issues around {topic}?"),
-        ]
-
-        for skill in source_skills:
-            for suffix, context in expansion_templates:
-                if len(unique) >= 10:
-                    break
-                topic_focus = f"{skill} {suffix}"
-                key = self._normalize_key(topic_focus)
-                if key in seen:
-                    continue
-                seen.add(key)
-                unique.append(
-                    {
-                        "topic_focus": topic_focus,
-                        "source_section": "skills",
-                        "skill": skill,
-                        "context": context.format(topic=skill),
-                        "technologies": [],
-                        "highlights": [],
-                    }
-                )
-            if len(unique) >= 10:
-                break
-
-        while len(unique) < 10:
-            topic_focus = f"resume detail {len(unique) + 1}"
-            unique.append(
-                {
-                    "topic_focus": topic_focus,
-                    "source_section": "skills",
-                    "skill": "General",
-                    "context": topic_focus,
-                    "technologies": [],
-                    "highlights": [],
-                }
-            )
-
-        return unique
-
-    def _next_candidate(self, candidates: list[dict[str, Any]], used_topics: set[str], index: int) -> dict[str, Any]:
-        for offset in range(len(candidates)):
-            candidate = candidates[(index + offset) % len(candidates)]
-            key = self._normalize_key(candidate["topic_focus"])
-            if key not in used_topics:
-                used_topics.add(key)
-                return candidate
-
-        candidate = candidates[index % len(candidates)]
-        used_topics.add(self._normalize_key(candidate["topic_focus"]))
-        return candidate
+    @staticmethod
+    def _slot_difficulty(difficulty: str, index: int, question_type: str) -> str:
+        level = difficulty if difficulty in QUESTION_DIFFICULTIES else "medium"
+        if level == "interview_ready":
+            level = ("low", "medium", "medium", "medium", "medium", "hard", "hard", "medium", "medium", "low")[index]
+        if question_type in {"introduction", "closing"}:
+            return "low" if level in {"low", "easy"} else "medium"
+        return level
 
     def _validate_questions(self, questions: list[dict], topic_plan: list[dict]) -> list[dict]:
         if len(questions) != 10:
@@ -419,12 +452,13 @@ class QuestionService:
 
         for index, question in enumerate(questions, start=1):
             plan_item = topic_plan[index - 1] if index - 1 < len(topic_plan) else {}
-            # Start from a consistent middle level; later questions are adapted from
-            # the candidate's server-calculated answer scores.
             difficulty = str(plan_item.get("difficulty", "medium")).lower().strip()
             question_type = str(question.get("question_type", plan_item.get("question_type", "conceptual"))).lower().strip()
+            if question_type == "situational":
+                question_type = "behavioral"
             topic_focus = str(question.get("topic_focus", plan_item.get("topic_focus", ""))).strip()
-            if difficulty not in QUESTION_DIFFICULTIES or question_type not in QUESTION_TYPES or not topic_focus:
+            text = str(question.get("question", "")).strip()
+            if difficulty not in QUESTION_DIFFICULTIES or question_type not in QUESTION_TYPES or not topic_focus or not text:
                 return []
             if self._normalize_key(topic_focus) in normalized_topics:
                 return []
@@ -434,163 +468,143 @@ class QuestionService:
                 return []
 
             normalized_topics.add(self._normalize_key(topic_focus))
-            normalized_questions.append(
-                {
-                    "question_id": index,
-                    "skill": str(question.get("skill", plan_item.get("skill", "General"))).strip() or "General",
-                    "difficulty": difficulty,
-                    "question_type": question_type,
-                    "topic_focus": topic_focus,
-                    "source_section": str(question.get("source_section", plan_item.get("source_section", "skills"))).strip()
-                    or "skills",
-                    "question": str(question.get("question", "")).strip(),
-                    "expected_answer": str(question.get("expected_answer", "")).strip(),
-                    "expected_points": expected_points,
-                    "key_points": expected_points,
-                }
-            )
+            normalized_questions.append({
+                "question_id": index,
+                "skill": str(question.get("skill", plan_item.get("skill", "General"))).strip() or "General",
+                "difficulty": difficulty,
+                "question_type": question_type,
+                "topic_focus": topic_focus,
+                "source_section": str(question.get("source_section", plan_item.get("source_section", "skills"))).strip() or "skills",
+                "question": text,
+                "transition": str(question.get("transition", plan_item.get("transition", ""))).strip()[:160],
+                "expected_answer": str(question.get("expected_answer", "")).strip(),
+                "expected_points": expected_points,
+                "key_points": expected_points,
+            })
 
         return normalized_questions
 
     def _build_fallback_questions(self, topic_plan: list[dict]) -> list[dict]:
         questions: list[dict] = []
-
         for index, plan_item in enumerate(topic_plan, start=1):
             question, expected_answer, expected_points = self._build_question_components(plan_item)
-            questions.append(
-                {
-                    "question_id": index,
-                    "skill": plan_item["skill"],
-                    "difficulty": plan_item["difficulty"],
-                    "question_type": plan_item["question_type"],
-                    "topic_focus": plan_item["topic_focus"],
-                    "source_section": plan_item["source_section"],
-                    "question": question,
-                    "expected_answer": expected_answer,
-                    "expected_points": expected_points,
-                    "key_points": expected_points,
-                }
-            )
-
+            questions.append({
+                "question_id": index,
+                "skill": plan_item["skill"],
+                "difficulty": plan_item["difficulty"],
+                "question_type": plan_item["question_type"],
+                "topic_focus": plan_item["topic_focus"],
+                "source_section": plan_item["source_section"],
+                "question": question,
+                "transition": plan_item.get("transition", ""),
+                "expected_answer": expected_answer,
+                "expected_points": expected_points,
+                "key_points": expected_points,
+            })
         return questions
 
     def _build_question_components(self, plan_item: dict[str, Any]) -> tuple[str, str, list[str]]:
-        topic = plan_item["topic_focus"]
-        context = self._clean_text(plan_item.get("context", ""))
+        """Interviewer-style questions built from resume details when no model is available."""
+        slot = plan_item.get("slot", "skill_applied")
+        difficulty = plan_item.get("difficulty", "medium")
+        anchor = self._clean_text(str(plan_item.get("anchor", "") or plan_item.get("topic_focus", "")))
+        org = self._clean_text(str(plan_item.get("org", "")))
+        where = f" at {org}" if org and org.lower() not in anchor.lower() else ""
         technologies = self._unique_strings(plan_item.get("technologies", []))
         highlights = self._unique_strings(plan_item.get("highlights", []))
-        question_type = plan_item["question_type"]
-        difficulty = plan_item["difficulty"]
-        source_section = plan_item["source_section"]
+        tech = technologies[0] if technologies else ""
+        kind = plan_item.get("kind", "")
+        skill = plan_item.get("skill", "")
 
-        if source_section == "projects":
-            if question_type == "practical":
-                question = f"I'd love to hear about your work on {topic}. Could you walk me through the technical choices you made?"
-                expected_answer = f"Explain the project goals, implementation steps, and why the chosen stack fit {topic}."
-                expected_points = [
-                    f"project goal behind {topic}",
-                    "implementation approach",
-                    "technology choices and tradeoffs",
-                    "result or learning from the project",
-                ]
-            elif question_type == "scenario":
-                question = f"Imagine we needed to scale {topic} for a larger user base. What would be your first steps?"
-                expected_answer = f"Discuss scaling concerns, data flow, bottlenecks, and how to adapt the project responsibly."
-                expected_points = [
-                    "identify bottlenecks",
-                    "data flow or architecture changes",
-                    "testing or monitoring approach",
-                    "tradeoff reasoning",
-                ]
+        if slot == "introduction":
+            question = "Could you walk me through your background, and what got you interested in this field?"
+            expected_answer = "A short, structured story: current studies, key experiences, and motivation."
+            points = ["current studies or role", "one or two relevant experiences", "what motivates them", "concise and structured"]
+        elif slot == "deep_dive":
+            if kind == "project":
+                question = f"Tell me about {anchor}. What problem were you solving, and what was your part in it?"
+            elif kind == "research":
+                question = f"I see you worked as {self._article(anchor)}{where}. What were you researching, and what did you contribute?"
             else:
-                question = f"Can you give me a high-level overview of {topic} and the main problem it aimed to solve?"
-                expected_answer = f"Describe the business or technical problem, the solution, and the main technologies used."
-                expected_points = [
-                    "problem statement",
-                    "solution summary",
-                    "technologies used",
-                    "outcome or impact",
-                ]
-        elif source_section in {"internships", "experience"}:
-            if question_type == "scenario":
-                question = f"How would you approach handling a production issue that impacted your work on {topic}?"
-                expected_answer = f"Talk through debugging, stakeholder communication, root cause analysis, and mitigation."
-                expected_points = [
-                    "debugging steps",
-                    "communication with team or stakeholders",
-                    "root cause analysis",
-                    "mitigation or follow-up",
-                ]
-            elif question_type == "practical":
-                question = f"Can you walk me through what you personally built or improved for {topic}?"
-                expected_answer = f"Explain responsibilities, implementation details, and validation or testing used in the role."
-                expected_points = [
-                    "your contribution",
-                    "implementation detail",
-                    "testing or validation",
-                    "measurable result or learning",
-                ]
+                question = f"Tell me about your time as {self._article(anchor)}{where}. What were you responsible for, and what are you proudest of?"
+            expected_answer = "Context, personal responsibilities, actions taken, and a concrete result."
+            points = ["context and goal", "personal contribution", "specific actions", "result or impact"]
+            if highlights:
+                points.append(self._shorten(highlights[0]))
+        elif slot == "decision":
+            if tech:
+                question = f"In that work you used {tech}. Walk me through a decision you made with it. What options did you consider, and why did you choose what you did?"
             else:
-                question = f"What was the most valuable lesson you took away from your experience with {topic}?"
-                expected_answer = f"Summarize the lesson, how it changed your approach, and how it applies to future work."
-                expected_points = [
-                    "lesson learned",
-                    "how it changed your approach",
-                    "future application",
-                ]
-        elif source_section == "education":
-            question = f"How has your educational background prepared you for practical work on {topic}?"
-            expected_answer = "Connect coursework, foundations, and practical readiness to the role."
-            expected_points = [
-                "relevant coursework or foundation",
-                "link to practical work",
-                "confidence with core concepts",
-            ]
-        else:
-            if question_type == "scenario":
-                question = f"If you were using {topic} in a brand-new project, what edge cases would you watch out for?"
-                expected_answer = f"Describe a real implementation approach for {topic} and mention reliability or edge cases."
-                expected_points = [
-                    "real use case",
-                    "implementation approach",
-                    "edge cases or tradeoffs",
-                ]
-            elif question_type == "practical":
-                question = f"Could you share an example of how you've applied {topic} in a hands-on capacity?"
-                expected_answer = f"Explain where {topic} fits, how it was used, and the value it added."
-                expected_points = [
-                    "where it was used",
-                    "how it was applied",
-                    "value or benefit",
-                ]
+                question = "Walk me through one important decision you made in that work. What options did you have, and why did you go the way you did?"
+            expected_answer = "A specific decision, the alternatives, the reasoning, and how it turned out."
+            points = ["specific decision", "alternatives considered", "reasoning or trade-off", "outcome"]
+        elif slot == "second_experience":
+            if kind == "research":
+                question = f"You also worked as {self._article(anchor)}{where}. What was the most challenging part of that work, and how did you handle it?"
+            elif kind == "project":
+                question = f"Let's talk about {anchor}. What was the hardest technical problem there, and how did you solve it?"
+            elif technologies:
+                question = f"You were also {self._article(anchor)}{where}. What was the hardest problem you ran into there, and how did you solve it?"
             else:
-                question = f"For someone less familiar, how would you describe the core concept behind {topic}?"
-                expected_answer = f"Define {topic} in plain language and explain why it matters in practice."
-                expected_points = [
-                    "clear definition",
-                    "practical relevance",
-                    "simple explanation",
-                ]
+                question = f"You also worked as {self._article(anchor)}{where}. What did that role teach you that you'd bring to an engineering job?"
+            expected_answer = "A specific challenge or lesson, actions taken, and transferable learning."
+            points = ["specific challenge or lesson", "actions taken", "result", "transferable skill"]
+        elif slot == "scenario":
+            question = plan_item.get("context") or GENERIC_SCENARIOS[0][0]
+            expected_answer = "A calm, structured approach: understand the problem, investigate, act, and verify."
+            points = list(plan_item.get("scenario_points") or GENERIC_SCENARIOS[0][1])
+        elif slot == "teamwork":
+            if anchor:
+                question = f"Thinking about your time at {anchor}, tell me about a moment when the team disagreed or got stuck. What did you do?"
+            else:
+                question = "Tell me about a time you worked in a team that disagreed or got stuck. What did you do?"
+            expected_answer = "A STAR story: situation, task, the candidate's own actions, and the result."
+            points = ["situation", "their role", "actions they took", "result and what they learned"]
+        elif slot == "setback":
+            question = "Tell me about something that didn't go as planned. What happened, and what did you do next?"
+            expected_answer = "An honest example, ownership of their part, the recovery, and the lesson."
+            points = ["honest example", "ownership", "how they recovered", "lesson applied later"]
+        elif slot == "closing":
+            question = "Where do you see yourself after graduating, and what kind of role are you hoping to grow into?"
+            expected_answer = "Clear, realistic goals connected to their skills and experiences."
+            points = ["specific goal", "link to their skills or experience", "realistic next steps"]
+        elif slot == "skill_depth":
+            if difficulty in {"low", "easy"}:
+                question = f"How would you explain {skill} to a first-year student, and where have you used it yourself?"
+            elif difficulty == "hard":
+                question = f"With {skill}, what's a common mistake people make, and how would you avoid it on a real project?"
+            else:
+                question = f"What's something about {skill} that took you a while to really understand? How did it finally click?"
+            expected_answer = f"An accurate explanation of {skill} tied to their own use of it."
+            points = [f"accurate understanding of {skill}", "personal example", "practical implications"]
+        else:  # skill_applied
+            if difficulty in {"low", "easy"}:
+                question = f"Your resume mentions {skill}. Can you tell me about a time you actually used it?"
+            elif difficulty == "hard":
+                question = f"Tell me about the most complex thing you've done with {skill}. What made it hard, and what would you improve now?"
+            else:
+                question = f"Your resume mentions {skill}. Walk me through something you built or worked on with it. What was your approach?"
+            expected_answer = f"A concrete example of using {skill}, the approach, and the result."
+            points = ["concrete example", "approach or steps", "result", f"correct use of {skill}"]
 
-        if difficulty == "hard":
-            expected_points.append("deeper tradeoff or design insight")
-            question = self._upgrade_for_hardness(question, topic)
-            expected_answer = self._upgrade_for_hardness(expected_answer, topic)
-        elif difficulty == "medium":
-            expected_points.append("some implementation detail")
+        if difficulty == "hard" and slot in {"deep_dive", "decision", "second_experience", "scenario"}:
+            question += " Also, what would you do differently with more time or at a larger scale?"
+            points.append("reflection on trade-offs or scale")
+        return question, expected_answer, self._unique_strings(points)[:5]
 
-        if technologies:
-            expected_points.append(f"reference to {technologies[0]}")
-        if highlights:
-            expected_points.append(highlights[0])
+    @staticmethod
+    def _article(phrase: str) -> str:
+        phrase = phrase.strip()
+        if not phrase:
+            return "a team member"
+        if re.match(r"^(the|a|an)\b", phrase, re.I):
+            return phrase
+        return f"{'an' if phrase[:1].lower() in 'aeiou' else 'a'} {phrase}"
 
-        expected_points = self._unique_strings(expected_points)
-        return question, expected_answer, expected_points[:5]
-
-    def _upgrade_for_hardness(self, text: str, topic: str) -> str:
-        if "design" not in text.lower():
-            return f"{text} Include design tradeoffs and explain how you would handle {topic} at larger scale."
-        return text
+    @staticmethod
+    def _shorten(text: str, words: int = 10) -> str:
+        parts = text.split()
+        return " ".join(parts[:words]).rstrip(",.;")
 
     def _normalize_list(self, items: list[Any]) -> list[str]:
         return self._unique_strings([str(item).strip() for item in items if str(item).strip()])
@@ -615,16 +629,8 @@ class QuestionService:
                 return cleaned
         return default
 
-    def _topic_label(self, primary: Any, secondary: Any, fallback: str) -> str:
-        for candidate in (primary, secondary):
-            cleaned = self._clean_text(str(candidate))
-            if cleaned:
-                return cleaned
-        return fallback
-
     def _clean_text(self, value: str) -> str:
-        cleaned = re.sub(r"\s+", " ", value).strip()
-        return cleaned
+        return re.sub(r"\s+", " ", value).strip()
 
     def _normalize_key(self, value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", value.lower())

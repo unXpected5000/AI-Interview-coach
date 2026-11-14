@@ -35,7 +35,9 @@ async def start_interview(
     interview_service: Annotated[InterviewService, Depends(get_interview_service)],
 ) -> dict:
     enforce(INTERVIEW_START_USER, current_user["id"])
-    interview = await interview_service.start_interview(current_user["id"], payload.resume_id, payload.difficulty, payload.difficulty_mode)
+    interview = await interview_service.start_interview(
+        current_user["id"], payload.resume_id, payload.difficulty, payload.difficulty_mode, candidate=current_user,
+    )
     return {"interview": interview}
 
 

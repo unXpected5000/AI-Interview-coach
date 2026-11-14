@@ -18,6 +18,8 @@ class InterviewQuestion(BaseModel):
     expected_points: list[str] = Field(default_factory=list)
     key_points: list[str] = Field(default_factory=list)
     follow_up_for: int | None = None
+    # Short spoken lead-in read before the question in the live interview.
+    transition: str = ""
 
 
 class InterviewResponse(BaseModel):

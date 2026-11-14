@@ -98,8 +98,9 @@ def test_answer_key_is_hidden_while_active_and_revealed_after_completion():
     interview = asyncio.run(service.start_interview(USER, resume_id))
     assert SECRET_ANSWER not in str(interview) and SECRET_POINT not in str(interview)
 
-    # A very short answer scores low, which triggers a follow-up question.
-    saved = asyncio.run(service.submit_answer(interview["id"], USER, 1, "indexes help"))
+    # A substantive but weak answer scores low, which triggers a follow-up question.
+    vague = "I think indexes are generally useful for things and they help in many situations when people use databases a lot"
+    saved = asyncio.run(service.submit_answer(interview["id"], USER, 1, vague))
     assert saved["follow_up_question"] is not None
     assert SECRET_ANSWER not in str(saved) and SECRET_POINT not in str(saved)
     assert saved["matched_points"] == [] and saved["missing_points"] == []
