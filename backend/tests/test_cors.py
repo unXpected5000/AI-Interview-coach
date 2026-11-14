@@ -70,3 +70,20 @@ def test_local_cors_default_does_not_allow_unlisted_origins() -> None:
     response_start = next(message for message in messages if message["type"] == "http.response.start")
 
     assert response_start["status"] == 400
+
+
+def test_deployed_pages_origin_can_call_the_api_directly() -> None:
+    allowed_origins = Settings(
+        _env_file=None,
+        backend_cors_origins="https://ai-interview-coach-3bj.pages.dev/, http://localhost:5173",
+    ).cors_origins
+    assert allowed_origins == ["https://ai-interview-coach-3bj.pages.dev", "http://localhost:5173"]
+
+    messages = _run_preflight("https://ai-interview-coach-3bj.pages.dev", allowed_origins)
+    response_start = next(message for message in messages if message["type"] == "http.response.start")
+    headers = dict(response_start["headers"])
+    assert response_start["status"] == 200
+    assert headers[b"access-control-allow-origin"] == b"https://ai-interview-coach-3bj.pages.dev"
+
+    preview = _run_preflight("https://abc123.ai-interview-coach-3bj.pages.dev", allowed_origins)
+    assert next(m for m in preview if m["type"] == "http.response.start")["status"] == 400

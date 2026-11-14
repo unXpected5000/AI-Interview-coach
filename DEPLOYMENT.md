@@ -1,6 +1,6 @@
 # Free deployment setup
 
-This repository is prepared for a static frontend on Cloudflare Pages and a Python API on Render's free web service. Deployments are not activated by this repository change; each provider requires signing in and connecting/configuring the repository. The Pages Function forwards `/api/*` over HTTPS to the backend, so browser API calls remain same-origin and do not need permissive CORS.
+This repository is prepared for a static frontend on Cloudflare Pages and a Python API on Render's free web service. Deployments are not activated by this repository change; each provider requires signing in and connecting/configuring the repository. The recommended setup has the browser call the Render API directly (`VITE_API_BASE_URL` on Pages plus `BACKEND_CORS_ORIGINS` on Render). The Pages Function proxy for `/api/*` remains as a fallback when `VITE_API_BASE_URL` is not set, but Render's edge can answer proxied server-to-server requests with a Cloudflare bot challenge (HTTP 429, "Just a moment..."), which breaks every API call including sign-in.
 
 ## Before deploying
 
@@ -15,7 +15,7 @@ This repository is prepared for a static frontend on Cloudflare Pages and a Pyth
 2. Set `MONGODB_URI` to the hosted MongoDB connection string when prompted. Set `GOOGLE_CLIENT_ID` to the Google OAuth **Web application client ID** to enable Google sign-in. Enter `GEMINI_API_KEY` only if you want live model-generated questions and feedback and have verified that requests stay within a free quota.
 3. Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM_EMAIL` for the email provider you choose (password registration is refused with a 503 until these are set). Set `OPERATOR_EMAILS` to the address of the first operator; it is promoted after it signs in with a verified email. Optionally set `DEPARTMENTS`. `PYTHON_VERSION` is pinned to 3.11.9 in `render.yaml` because Render's default for new services changes over time (3.14.x as of November 2026).
 4. Wait for the API to deploy. Verify `https://<render-service>.onrender.com/api/health` returns `{"status":"ok","database":"ok"}`. It returns 503 when MongoDB is unreachable, so Render will not report a broken API as healthy; `/api/health/live` only checks the process.
-5. The Pages Function proxies `/api/*` server-to-server, so browser requests are same-origin and CORS is not required. If you later change the frontend to call Render directly, set `BACKEND_CORS_ORIGINS` to the exact Pages origin and redeploy.
+5. Set `BACKEND_CORS_ORIGINS` to the exact Pages origin, for example `https://ai-interview-coach-3bj.pages.dev` (comma-separate several; add a custom domain here too). Preview deployments (`<hash>.<project>.pages.dev`) are different origins and are not allowed unless listed.
 
 ## Frontend on Cloudflare Pages
 
@@ -24,7 +24,8 @@ Create a Pages project connected to this repository with:
 - Root directory: `frontend`
 - Build command: `npm ci && npm run build`
 - Build output directory: `dist`
-- Runtime environment variable `BACKEND_API_ORIGIN`: `https://<render-service>.onrender.com` (HTTPS origin only; no `/api` suffix)
+- Build environment variable `VITE_API_BASE_URL`: `https://<render-service>.onrender.com` (with or without `/api`). It is compiled into the site, so trigger a new deployment after changing it.
+- Optional runtime environment variable `BACKEND_API_ORIGIN`: the same origin, used only by the fallback proxy when `VITE_API_BASE_URL` is empty.
 - Build environment variable `VITE_GOOGLE_CLIENT_ID`: the same Google OAuth Web application client ID configured on Render
 - Build environment variables for the legal pages: `VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, `VITE_LEGAL_POSTAL_ADDRESS`, `VITE_LEGAL_GOVERNING_LAW`, `VITE_LEGAL_MINIMUM_AGE` (and optionally `VITE_LEGAL_INSTITUTION`)
 

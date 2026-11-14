@@ -84,9 +84,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [
-            origin.strip()
+            # Browsers send origins without a trailing slash; tolerate one in config.
+            origin.strip().rstrip("/")
             for origin in self.backend_cors_origins.split(",")
-            if origin.strip()
+            if origin.strip().rstrip("/")
         ]
 
     @property
